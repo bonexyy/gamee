@@ -1,0 +1,351 @@
+#pragma comment(linker, "/SUBSYSTEM:CONSOLE")
+#pragma comment(linker, "/ENTRY:mainCRTStartup")
+#pragma comment(linker, "/NODEFAULTLIB:MSVCRT")
+
+// 1. Стандартные системные библиотеки С++
+#include <vector>
+#include <string>
+#include <cstdlib>
+#include <ctime>
+#include <cmath>
+#include <fstream>
+#include <sstream>
+
+// 2. Графическая библиотека
+#include <raylib.h>
+
+using namespace std;
+
+const int SIZE = 4;
+const int CELL_SIZE = 120;
+const int PADDING = 15;
+
+string IntToString(int number) {
+    ostringstream ss;
+    ss << number;
+    return ss.str();
+}
+
+int screenWidth = 0;
+int screenHeight = 0;
+int boardOffsetX = 0;
+int boardOffsetY = 0;
+int highScore = 0;
+int score = 0;
+
+struct Tile {
+    int value = 0;
+    int prevValue = 0;
+    Vector2 currentPos = {0.0f, 0.0f};
+    Vector2 targetPos = {0.0f, 0.0f};
+    float scale = 0.0f;
+    bool isMoving = false;
+    bool justMerged = false;
+};
+
+Tile board[SIZE][SIZE];
+
+struct Button {
+    Rectangle rect;
+    string text;
+    bool isHovered;
+
+    Button() {
+        rect = { 0.0f, 0.0f, 0.0f, 0.0f };
+        text = "";
+        isHovered = false;
+    }
+};
+
+Button restartBtn;
+
+struct Star {
+    Vector2 position;
+    float radius;
+    float maxAlpha;
+    float currentAlpha;
+    float glowSpeed;
+};
+vector<Star> stars;
+
+struct Spark {
+    Vector2 position;
+    Vector2 speed;
+    Color color;
+    float radius;
+    float alpha;
+    float life;
+};
+vector<Spark> sparks;
+
+Vector2 GetCellScreenPos(int i, int j) {
+    float x = (float)boardOffsetX + (float)PADDING + (float)j * ((float)CELL_SIZE + (float)PADDING);
+    float y = (float)boardOffsetY + (float)PADDING + (float)i * ((float)CELL_SIZE + (float)PADDING);
+    return { x, y };
+}
+
+void LoadHighScore() {
+    ifstream file("highscore.txt");
+    if (file.is_open()) { 
+        file >> highScore; 
+        file.close(); 
+    } else { 
+        highScore = 0; 
+    }
+}
+
+void SaveHighScore() {
+    ofstream file("highscore.txt");
+    if (file.is_open()) { 
+        file << highScore; 
+        file.close(); 
+    }
+}
+
+void InitStars() {
+    stars.clear();
+    for (int i = 0; i < 150; i++) {
+        stars.push_back({
+            { (float)(rand() % (screenWidth > 0 ? screenWidth : 800)), (float)(rand() % (screenHeight > 0 ? screenHeight : 800)) },
+            (float)(rand() % 20 + 5) / 10.0f,
+            (float)(rand() % 60 + 40) / 100.0f,
+            (float)(rand() % 100) / 100.0f,
+            (float)(rand() % 20 + 5) / 10.0f
+        });
+    }
+}
+
+void UpdateStars(float dt) {
+    for (int i = 0; i < (int)stars.size(); i++) {
+        Star &s = stars[i];
+        s.currentAlpha += s.glowSpeed * dt;
+        if (s.currentAlpha > s.maxAlpha || s.currentAlpha < 0.1f) {
+            s.glowSpeed *= -1.0f;
+        }
+    }
+}
+
+void CreateSparksExplosion(Vector2 centerPos, Color tileColor) {
+    Vector2 center = { centerPos.x + (float)CELL_SIZE / 2.0f, centerPos.y + (float)CELL_SIZE / 2.0f };
+    for (int i = 0; i < 15; i++) {
+        float angle = (float)(rand() % 360) * DEG2RAD;
+        float speedMag = (float)(rand() % 150 + 50);
+        sparks.push_back({
+            center,
+            { (float)(cosf(angle) * speedMag), (float)(sinf(angle) * speedMag) },
+            tileColor,
+            (float)(rand() % 3 + 2),
+            1.0f,
+            (float)(rand() % 40 + 20) / 100.0f
+        });
+    }
+}
+
+void UpdateSparks(float dt) {
+    for (int i = 0; i < (int)sparks.size(); ) {
+        sparks[i].position.x += sparks[i].speed.x * dt;
+        sparks[i].position.y += sparks[i].speed.y * dt;
+        sparks[i].life -= dt;
+        sparks[i].alpha = sparks[i].life / 0.5f;
+        if (sparks[i].alpha > 1.0f) sparks[i].alpha = 1.0f;
+
+        if (sparks[i].life <= 0.0f) {
+            sparks.erase(sparks.begin() + i);
+        } else {
+            i++;
+        }
+    }
+}
+
+Color GetTileColor(int value) {
+    switch (value) {
+        case 2:    return GetColor(0xeee4daff);
+        case 4:    return GetColor(0xede0c8ff);
+        case 8:    return GetColor(0xf2b179ff);
+        case 16:   return GetColor(0xf59563ff);
+        case 32:   return GetColor(0xf67c5fff);
+        case 64:   return GetColor(0xf65e3bff);
+        case 128:  return GetColor(0xedcf72ff);
+        case 256:  return GetColor(0xedcc61ff);
+        case 512:  return GetColor(0xedc850ff);
+        case 1024: return GetColor(0xedc53fff);
+        case 2048: return GetColor(0xedc22eff);
+        default:   return GetColor(0x3c3a32ff); 
+    }
+}
+
+Color GetTileTextColor(int value) {
+    return (value <= 4) ? GetColor(0x776e65ff) : RAYWHITE;
+}
+
+void AddRandomTile() {
+    vector<pair<int, int> > emptyCells;
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            if (board[i][j].value == 0) emptyCells.push_back(make_pair(i, j));
+        }
+    }
+    if (!emptyCells.empty()) {
+        int index = rand() % emptyCells.size();
+        int r = emptyCells[index].first;
+        int c = emptyCells[index].second;
+        
+        board[r][c].value = (rand() % 10 == 0) ? 4 : 2;
+        board[r][c].prevValue = board[r][c].value;
+        board[r][c].currentPos = GetCellScreenPos(r, c);
+        board[r][c].targetPos = board[r][c].currentPos;
+        board[r][c].scale = 0.0f;
+        board[r][c].isMoving = false;
+        board[r][c].justMerged = false;
+    }
+}
+
+void RestartGame() {
+    score = 0;
+    sparks.clear();
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            board[i][j] = Tile();
+        }
+    }
+    AddRandomTile();
+    AddRandomTile();
+}
+
+void SlideLine(int lineIndex, Tile* activeLine[SIZE]) {
+    for (int i = 0; i < SIZE; i++) {
+        if (activeLine[i]->value == 0) continue;
+        int target = i;
+        while (target > 0 && activeLine[target - 1]->value == 0) {
+            target--;
+        }
+        if (target != i) {
+            activeLine[target]->value = activeLine[i]->value;
+            activeLine[target]->currentPos = activeLine[i]->currentPos;
+            activeLine[target]->scale = activeLine[i]->scale;
+            activeLine[i]->value = 0;
+        }
+    }
+
+    for (int i = 0; i < SIZE - 1; i++) {
+        if (activeLine[i]->value != 0 && activeLine[i]->value == activeLine[i + 1]->value) {
+            activeLine[i]->value *= 2;
+            score += activeLine[i]->value;
+            if (score > highScore) { 
+                highScore = score; 
+                SaveHighScore(); 
+            }
+            
+            activeLine[i]->justMerged = true;
+            activeLine[i + 1]->value = 0;
+
+            for (int j = i + 1; j < SIZE - 1; j++) {
+                activeLine[j]->value = activeLine[j + 1]->value;
+                activeLine[j]->currentPos = activeLine[j + 1]->currentPos;
+                activeLine[j]->scale = activeLine[j + 1]->scale;
+                activeLine[j + 1]->value = 0;
+            }
+        }
+    }
+}
+
+void GetLinePointers(int dir, int index, Tile* activeLine[SIZE]) {
+    for (int i = 0; i < SIZE; i++) {
+        if (dir == 0)      activeLine[i] = &board[index][i];
+        else if (dir == 1) activeLine[i] = &board[SIZE - 1 - i][index];
+        else if (dir == 2) activeLine[i] = &board[index][SIZE - 1 - i];
+        else if (dir == 3) activeLine[i] = &board[i][index];
+    }
+}
+
+bool MakeMove(int key) {
+    int dir = -1;
+    if (key == KEY_LEFT || key == KEY_A) dir = 0;
+    else if (key == KEY_DOWN || key == KEY_S) dir = 1;
+    else if (key == KEY_RIGHT || key == KEY_D) dir = 2;
+    else if (key == KEY_UP || key == KEY_W) dir = 3;
+    if (dir == -1) return false;
+
+    int backup[SIZE][SIZE];
+    for (int i = 0; i < SIZE; i++)
+        for (int j = 0; j < SIZE; j++)
+            backup[i][j] = board[i][j].value;
+
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            board[i][j].justMerged = false;
+        }
+    }
+
+    for (int i = 0; i < SIZE; i++) {
+        Tile* activeLine[SIZE];
+        GetLinePointers(dir, i, activeLine);
+        SlideLine(i, activeLine);
+    }
+
+    bool changed = false;
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            board[i][j].targetPos = GetCellScreenPos(i, j);
+            if (board[i][j].value != 0) {
+                board[i][j].isMoving = true;
+            }
+            if (board[i][j].value != backup[i][j]) changed = true;
+        }
+    }
+
+    return changed;
+}
+
+bool IsGameOver() {
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            if (board[i][j].value == 0) return false;
+            if (i < SIZE - 1 && board[i][j].value == board[i + 1][j].value) return false;
+            if (j < SIZE - 1 && board[i][j].value == board[i][j + 1].value) return false;
+        }
+    }
+    return true;
+}
+
+void UpdateAnimation(float dt) {
+    const float SPEED = 800.0f;
+    const float SCALE_SPEED = 5.0f;
+
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            Tile &t = board[i][j];
+
+            if (t.value != 0 && t.scale < 1.0f) {
+                t.scale += SCALE_SPEED * dt;
+                if (t.scale > 1.0f) t.scale = 1.0f;
+            }
+
+            if (t.isMoving) {
+                float dx = t.targetPos.x - t.currentPos.x;
+                float dy = t.targetPos.y - t.currentPos.y;
+                float dist = sqrtf(dx*dx + dy*dy);
+                float step = SPEED * dt;
+
+                if (dist <= step) {
+                    t.currentPos = t.targetPos;
+                    t.isMoving = false;
+                    
+                    if (t.justMerged) {
+                        CreateSparksExplosion(t.currentPos, GetTileColor(t.value));
+                        t.justMerged = false;
+                    }
+                } else {
+                    t.currentPos.x += (dx / dist) * step;
+                    t.currentPos.y += (dy / dist) * step;
+                }
+            } else {
+                t.currentPos = GetCellScreenPos(i, j);
+            }
+        }
+    }
+}
+
+void DrawSpaceBackground(float time) {
+    Color spaceDark = { 4, 4, 10, 255 };
+Color spaceBlue = { 12, 18, 40, 255 };DrawRectangleGradientV(0, 0, screenWidth, screenHeight, spaceDark, spaceBlue);for (int i = 0; i < (int)stars.size(); i++) {const Star &s = stars[i];DrawCircleV(s.position, s.radius, Fade(RAYWHITE, s.currentAlpha));}Vector2 moonPos = { (float)screenWidth - 250.0f, 220.0f };float moonRadius = 110.0f;BeginBlendMode(BLEND_ADDITIVE);float pulse = (sinf(time * 1.5f) + 1.0f) / 2.0f;for (int i = 1; i <= 35; i++) {float alpha = (0.035f - ((float)i * 0.0009f)) + pulse * 0.005f;if (alpha < 0.0f) alpha = 0.0f;DrawCircleV(moonPos, moonRadius + (float)i * 2.8f, Fade(GetColor(0x38bdf8ff), alpha * 1.6f));DrawCircleV(moonPos, moonRadius + (float)i * 1.4f, Fade(RAYWHITE, alpha * 0.8f));}EndBlendMode();DrawCircleV(moonPos, moonRadius, GetColor(0xfffbebff));DrawCircleV(moonPos, moonRadius, Fade(GetColor(0xe0f2feff), 0.5f));float cratersData[8][3] = {{ moonPos.x - 35.0f, moonPos.y - 25.0f, 24.0f },{ moonPos.x + 45.0f, moonPos.y + 15.0f, 16.0f },{ moonPos.x - 12.0f, moonPos.y + 50.0f, 19.0f },{ moonPos.x + 15.0f, moonPos.y - 55.0f, 13.0f },{ moonPos.x - 60.0f, moonPos.y + 20.0f, 11.0f },{ moonPos.x - 15.0f, moonPos.y - 65.0f, 15.0f },{ moonPos.x + 55.0f, moonPos.y - 30.0f, 10.0f },{ moonPos.x + 10.0f, moonPos.y + 70.0f, 12.0f }};Color baseCrater = GetColor(0xcbd5e1ff);Color shadowCrater = GetColor(0x64748bff);Color lightRim = GetColor(0xffffffff);for (int i = 0; i < 8; i++) {Vector2 cPos = { cratersData[i][0], cratersData[i][1] };float r = cratersData[i][2];DrawCircleV({ cPos.x - 1.5f, cPos.y - 1.5f }, r + 1.0f, Fade(lightRim, 0.6f));DrawCircleV(cPos, r, Fade(baseCrater, 0.6f));DrawCircleV({ cPos.x + 2.0f, cPos.y + 2.0f }, r - 1.5f, Fade(shadowCrater, 0.45f));}DrawLineEx({ moonPos.x - 35.0f, moonPos.y - 25.0f }, { moonPos.x - 80.0f, moonPos.y - 10.0f }, 1.5f, Fade(lightRim, 0.25f));DrawLineEx({ moonPos.x - 35.0f, moonPos.y - 25.0f }, { moonPos.x + 10.0f, moonPos.y - 5.0f }, 1.5f, Fade(lightRim, 0.25f));DrawLineEx({ moonPos.x - 35.0f, moonPos.y - 25.0f }, { moonPos.x - 20.0f, moonPos.y + 30.0f }, 1.5f, Fade(lightRim, 0.25f));for (int i = 0; i < 40; i++) {float factor = (float)i / 40.0f;float shadowAlpha = 0.015f + (factor * 0.012f);float shadowOffset = factor * 45.0f;DrawCircleSector({ moonPos.x + shadowOffset, moonPos.y }, moonRadius + 2.0f, 90.0f, 270.0f, 0, Fade(GetColor(0x090d1fff), shadowAlpha));}DrawCircleSector(moonPos, moonRadius, 90.0f, 270.0f, 0, Fade(GetColor(0x38bdf8ff), 0.04f));}int main(){srand((unsigned int)time(0));InitWindow(0, 0, "2048 - Space 4K Edition");ToggleFullscreen();SetTargetFPS(60);screenWidth = GetScreenWidth();screenHeight = GetScreenHeight();int boardWidth = CELL_SIZE * SIZE + PADDING * (SIZE + 1);boardOffsetX = (screenWidth - boardWidth) / 2;boardOffsetY = (screenHeight - boardWidth) / 2 + 60;restartBtn.rect = { (float)boardOffsetX, (float)boardOffsetY - 75.0f, 160.0f, 45.0f };restartBtn.text = "RESTART";restartBtn.isHovered = false;LoadHighScore();InitStars();RestartGame();Color boardBgColor = { 30, 41, 59, 230 };Color emptyCellColor = { 51, 65, 85, 255 };while (WindowShouldClose() == false){float dt = GetFrameTime();Vector2 mousePos = GetMousePosition();restartBtn.isHovered = CheckCollisionPointRec(mousePos, restartBtn.rect);if (restartBtn.isHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {RestartGame();}int keyPressed = GetKeyPressed();if (keyPressed != 0) {if (MakeMove(keyPressed)) {AddRandomTile();}}UpdateStars(dt);UpdateSparks(dt);UpdateAnimation(dt);float runTime = (float)GetTime();BeginDrawing();DrawSpaceBackground(runTime);DrawText("2048", boardOffsetX + 2, boardOffsetY - 150, 65, GetColor(0x0f172aff));DrawText("2048", boardOffsetX, boardOffsetY - 152, 65, RAYWHITE);string scoreText = "SCORE: " + IntToString(score);string hiScoreText = "BEST: " + IntToString(highScore);DrawText(scoreText.c_str(), boardOffsetX + 330, boardOffsetY - 145, 22, GetColor(0x38bdf8ff));DrawText(hiScoreText.c_str(), boardOffsetX + 330, boardOffsetY - 115, 22, GetColor(0xa855f7ff));DrawRectangle(boardOffsetX, boardOffsetY, boardWidth, boardWidth, boardBgColor);for (int i = 0; i < SIZE; i++) {for (int j = 0; j < SIZE; j++) {Vector2 staticPos = GetCellScreenPos(i, j);DrawRectangle((int)staticPos.x, (int)staticPos.y, CELL_SIZE, CELL_SIZE, emptyCellColor);}}Color btnColor = restartBtn.isHovered ? GetColor(0x3b82f6ff) : GetColor(0x1d4ed8ff);DrawRectangleRounded(restartBtn.rect, 0.25f, 4, btnColor);int textW = MeasureText(restartBtn.text.c_str(), 16);DrawText(restartBtn.text.c_str(), (int)restartBtn.rect.x + ((int)restartBtn.rect.width - textW)/2, (int)restartBtn.rect.y + 14, 16, RAYWHITE);for (int i = 0; i < SIZE; i++) {for (int j = 0; j < SIZE; j++) {Tile &t = board[i][j];if (t.value == 0) continue;float animatedSize = (float)CELL_SIZE * t.scale;float offset = ((float)CELL_SIZE - animatedSize) / 2.0f;DrawRectangle((int)(t.currentPos.x + offset), (int)(t.currentPos.y + offset), (int)animatedSize, (int)animatedSize, GetTileColor(t.value));if (t.scale >= 0.5f) {string valStr = IntToString(t.value);int fontSize = (t.value >= 1024) ? 30 : 40;fontSize = (int)((float)fontSize * t.scale);if (fontSize < 1) fontSize = 1;int textWidth = MeasureText(valStr.c_str(), fontSize);int textX = (int)t.currentPos.x + (CELL_SIZE - textWidth) / 2;int textY = (int)t.currentPos.y + (CELL_SIZE - fontSize) / 2;DrawText(valStr.c_str(), textX, textY, fontSize, GetTileTextColor(t.value));}}}for (int i = 0; i < (int)sparks.size(); i++) {DrawCircleV(sparks[i].position, sparks[i].radius, Fade(sparks[i].color, sparks[i].alpha));}DrawText("Press ESC to Exit", 20, screenHeight - 40, 20, GRAY);if (IsGameOver()) {DrawRectangle(boardOffsetX, boardOffsetY, boardWidth, boardWidth, Fade(BLACK, 0.75f));DrawText("GAME OVER", boardOffsetX + 110, boardOffsetY + 220, 50, RED);}EndDrawing();}CloseWindow();return 0;}// ЭТОТ БЛОК ПЕРЕНАПРАВЛЯЕТ ВЫЗОВ И РЕШАЕТ ОШИБКУ LINKER РАЗ И НАВСЕГДА#ifdef _WIN32#include <windows.h>int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {return main();}#endif
