@@ -1,351 +1,1625 @@
-#pragma comment(linker, "/SUBSYSTEM:CONSOLE")
-#pragma comment(linker, "/ENTRY:mainCRTStartup")
-#pragma comment(linker, "/NODEFAULTLIB:MSVCRT")
-
-// 1. Стандартные системные библиотеки С++
+#include <raylib.h>
 #include <vector>
-#include <string>
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
+#include <string>
+#include <algorithm>
 #include <fstream>
-#include <sstream>
+#include <functional>
 
-// 2. Графическая библиотека
-#include <raylib.h>
-
-using namespace std;
-
-const int SIZE = 4;
-const int CELL_SIZE = 120;
-const int PADDING = 15;
-
-string IntToString(int number) {
-    ostringstream ss;
-    ss << number;
-    return ss.str();
-}
-
-int screenWidth = 0;
-int screenHeight = 0;
-int boardOffsetX = 0;
-int boardOffsetY = 0;
-int highScore = 0;
-int score = 0;
-
-struct Tile {
-    int value = 0;
-    int prevValue = 0;
-    Vector2 currentPos = {0.0f, 0.0f};
-    Vector2 targetPos = {0.0f, 0.0f};
-    float scale = 0.0f;
-    bool isMoving = false;
-    bool justMerged = false;
+// Перечисление типов врагов
+enum class EnemyType {
+    ASTEROID,
+    FAST_ASTEROID,
+    TANK_ASTEROID,
+    UFO,
+    SPLITTER
 };
 
-Tile board[SIZE][SIZE];
-
-struct Button {
-    Rectangle rect;
-    string text;
-    bool isHovered;
-
-    Button() {
-        rect = { 0.0f, 0.0f, 0.0f, 0.0f };
-        text = "";
-        isHovered = false;
-    }
+// Перечисление типов бонусов
+enum class PowerUpType {
+    HEALTH,
+    TRIPLE_SHOT,
+    RAPID_FIRE,
+    SHIELD,
+    SCORE_BOOST
 };
 
-Button restartBtn;
+// Перечисление типов оружия
+enum class WeaponType {
+    BASIC,
+    SPREAD,
+    LASER,
+    PLASMA
+};
 
+// Перечисление состояний игры
+enum class GameState {
+    MENU,
+    PLAYING,
+    PAUSED,
+    GAME_OVER,
+    HIGH_SCORES,
+    SHOP
+};
+
+// Перечисление режимов игры
+enum class GameMode {
+    CLASSIC,
+    ENDLESS,
+    TIME_ATTACK,
+    SURVIVAL
+};
+
+// Перечисление специальных способностей
+enum class AbilityType {
+    NUKE,
+    TIME_SLOW,
+    INVINCIBLE,
+    HEAL
+};
+
+// Структура для пуль
+struct Bullet {
+    Vector2 position;
+    Vector2 velocity;
+    float radius;
+    bool active;
+    float lifeTime;
+    int damage;
+    Color color;
+    bool isEnemyBullet;
+    bool isHoming;
+    Vector2 target;
+};
+
+// Структура для врагов
+struct Enemy {
+    Vector2 position;
+    Vector2 velocity;
+    float radius;
+    bool active;
+    float rotation;
+    float rotationSpeed;
+    int health;
+    int maxHealth;
+    Color color;
+    EnemyType type;
+    float shootTimer;
+    float shootInterval;
+    int scoreValue;
+};
+
+// Структура для частиц
+struct Particle {
+    Vector2 position;
+    Vector2 velocity;
+    float lifeTime;
+    float maxLifeTime;
+    Color color;
+    float size;
+};
+
+// Структура для бонусов
+struct PowerUp {
+    Vector2 position;
+    Vector2 velocity;
+    float radius;
+    bool active;
+    PowerUpType type;
+    float lifeTime;
+    float bobTimer;
+};
+
+// Структура для звёзд фона
 struct Star {
     Vector2 position;
-    float radius;
-    float maxAlpha;
-    float currentAlpha;
-    float glowSpeed;
-};
-vector<Star> stars;
-
-struct Spark {
-    Vector2 position;
-    Vector2 speed;
+    float speed;
+    float size;
+    float brightness;
     Color color;
-    float radius;
-    float alpha;
-    float life;
 };
-vector<Spark> sparks;
 
-Vector2 GetCellScreenPos(int i, int j) {
-    float x = (float)boardOffsetX + (float)PADDING + (float)j * ((float)CELL_SIZE + (float)PADDING);
-    float y = (float)boardOffsetY + (float)PADDING + (float)i * ((float)CELL_SIZE + (float)PADDING);
-    return { x, y };
-}
+// Структура для туманностей
+struct Nebula {
+    Vector2 position;
+    float radius;
+    Color color;
+    float alpha;
+    float rotation;
+    float rotationSpeed;
+};
 
-void LoadHighScore() {
-    ifstream file("highscore.txt");
-    if (file.is_open()) { 
-        file >> highScore; 
-        file.close(); 
-    } else { 
-        highScore = 0; 
+// Структура для солнца
+struct Sun {
+    Vector2 position;
+    float radius;
+    float coreRadius;
+    Color outerColor;
+    Color innerColor;
+    Color coreColor;
+    float pulseTimer;
+    float rotationAngle;
+};
+
+// Структура для трейлов
+struct Trail {
+    Vector2 position;
+    float lifeTime;
+    float maxLifeTime;
+    Color color;
+};
+
+// Структура для специальных способностей
+struct SpecialAbility {
+    AbilityType type;
+    float cooldown;
+    float currentCooldown;
+    bool isReady;
+};
+
+// Структура для босса
+struct Boss {
+    Vector2 position;
+    float radius;
+    int health;
+    int maxHealth;
+    float phase;
+    float attackTimer;
+    bool active;
+    float movementTimer;
+};
+
+// Структура для игрока
+struct Player {
+    Vector2 position;
+    float radius;
+    float speed;
+    Color color;
+    int lives;
+    int maxLives;
+    bool hasShield;
+    float shieldTimer;
+    bool hasTripleShot;
+    float tripleShotTimer;
+    bool hasRapidFire;
+    float rapidFireTimer;
+    bool hasScoreBoost;
+    float scoreBoostTimer;
+    float shootCooldown;
+    float baseShootDelay;
+    int weaponLevel;
+    WeaponType weaponType;
+    float rotation;
+};
+
+// Структура для достижений
+struct Achievement {
+    std::string name;
+    std::string description;
+    bool unlocked;
+    std::function<bool()> condition;
+};
+
+// Структура для записи рекорда
+struct ScoreEntry {
+    int score;
+    int level;
+    int enemiesDestroyed;
+};
+
+// Структура для комбо-системы
+struct ComboSystem {
+    int comboCount;
+    float comboTimer;
+    float comboMultiplier;
+    int maxComboReached;
+
+    void Reset() {
+        comboCount = 0;
+        comboTimer = 0;
+        comboMultiplier = 1.0f;
+        maxComboReached = 0;
     }
-}
 
-void SaveHighScore() {
-    ofstream file("highscore.txt");
-    if (file.is_open()) { 
-        file << highScore; 
-        file.close(); 
+    void AddKill() {
+        comboCount++;
+        comboTimer = 3.0f;
+        comboMultiplier = 1.0f + comboCount * 0.1f;
+        if (comboMultiplier > 5.0f) comboMultiplier = 5.0f;
+        if (comboCount > maxComboReached) maxComboReached = comboCount;
     }
-}
 
-void InitStars() {
-    stars.clear();
-    for (int i = 0; i < 150; i++) {
-        stars.push_back({
-            { (float)(rand() % (screenWidth > 0 ? screenWidth : 800)), (float)(rand() % (screenHeight > 0 ? screenHeight : 800)) },
-            (float)(rand() % 20 + 5) / 10.0f,
-            (float)(rand() % 60 + 40) / 100.0f,
-            (float)(rand() % 100) / 100.0f,
-            (float)(rand() % 20 + 5) / 10.0f
-        });
-    }
-}
-
-void UpdateStars(float dt) {
-    for (int i = 0; i < (int)stars.size(); i++) {
-        Star &s = stars[i];
-        s.currentAlpha += s.glowSpeed * dt;
-        if (s.currentAlpha > s.maxAlpha || s.currentAlpha < 0.1f) {
-            s.glowSpeed *= -1.0f;
+    void Update() {
+        if (comboTimer > 0) {
+            comboTimer -= GetFrameTime();
+            if (comboTimer <= 0) {
+                comboCount = 0;
+                comboMultiplier = 1.0f;
+            }
         }
     }
-}
+};
 
-void CreateSparksExplosion(Vector2 centerPos, Color tileColor) {
-    Vector2 center = { centerPos.x + (float)CELL_SIZE / 2.0f, centerPos.y + (float)CELL_SIZE / 2.0f };
+// Структура для магазина
+struct ShopItem {
+    std::string name;
+    int cost;
+    std::string description;
+    bool purchased;
+};
+
+// Структура для статистики игры
+struct GameStats {
+    int totalShots;
+    int totalHits;
+    float accuracy;
+    int powerUpsCollected;
+    int bossesDefeated;
+    float gameTime;
+    int maxLevelReached;
+};
+
+int main()
+{
+    // Настройки окна - 4K разрешение
+    const int screenWidth = 1920;
+    const int screenHeight = 1080;
+
+    // Инициализация окна
+    InitWindow(screenWidth, screenHeight, "Space Shooter Ultimate 4K!");
+    SetTargetFPS(60);
+
+    // Инициализация генератора случайных чисел
+    srand(static_cast<unsigned int>(time(nullptr)));
+
+    // Состояние игры
+    GameState gameState = GameState::MENU;
+    GameMode gameMode = GameMode::CLASSIC;
+
+    // Создание игрока
+    Player player;
+    player.position = { static_cast<float>(screenWidth) / 2.0f,
+                       static_cast<float>(screenHeight) - 150.0f };
+    player.radius = 30.0f;
+    player.speed = 8.0f;
+    player.color = { 100, 200, 255, 255 };
+    player.lives = 5;
+    player.maxLives = 5;
+    player.hasShield = false;
+    player.shieldTimer = 0.0f;
+    player.hasTripleShot = false;
+    player.tripleShotTimer = 0.0f;
+    player.hasRapidFire = false;
+    player.rapidFireTimer = 0.0f;
+    player.hasScoreBoost = false;
+    player.scoreBoostTimer = 0.0f;
+    player.shootCooldown = 0.0f;
+    player.baseShootDelay = 0.25f;
+    player.weaponLevel = 1;
+    player.weaponType = WeaponType::BASIC;
+    player.rotation = 0.0f;
+
+    // Игровые переменные
+    int score = 0;
+    int level = 1;
+    int enemiesDestroyed = 0;
+    int currency = 0;
+    bool gameOver = false;
+    bool gamePaused = false;
+    float gameOverTimer = 0.0f;
+    float levelTimer = 0.0f;
+    float invincibilityTimer = 0.0f;
+    const float INVINCIBILITY_DURATION = 2.0f;
+    float screenShakeTimer = 0.0f;
+    float timeAttackTimer = 60.0f;
+
+    // Комбо-система
+    ComboSystem combo;
+    combo.Reset();
+
+    // Статистика игры
+    GameStats stats;
+    stats.totalShots = 0;
+    stats.totalHits = 0;
+    stats.accuracy = 0.0f;
+    stats.powerUpsCollected = 0;
+    stats.bossesDefeated = 0;
+    stats.gameTime = 0.0f;
+    stats.maxLevelReached = 1;
+
+    // Босс
+    Boss boss;
+    boss.active = false;
+    boss.radius = 80.0f;
+    boss.maxHealth = 100;
+    boss.health = boss.maxHealth;
+    boss.phase = 0.0f;
+    boss.attackTimer = 0.0f;
+    boss.movementTimer = 0.0f;
+
+    // Специальные способности
+    SpecialAbility nukeAbility = { AbilityType::NUKE, 15.0f, 0.0f, true };
+    SpecialAbility slowAbility = { AbilityType::TIME_SLOW, 10.0f, 0.0f, true };
+    SpecialAbility invincibleAbility = { AbilityType::INVINCIBLE, 20.0f, 0.0f, true };
+    SpecialAbility healAbility = { AbilityType::HEAL, 12.0f, 0.0f, true };
+
+    // Магазин
+    std::vector<ShopItem> shopItems = {
+        {"Better Engine", 500, "Increase speed", false},
+        {"Stronger Shots", 1000, "Increase damage", false},
+        {"Extra Life", 2000, "Increase max lives", false},
+        {"Spread Shot", 3000, "Unlock spread weapon", false},
+        {"Laser Weapon", 5000, "Unlock laser weapon", false},
+        {"Plasma Weapon", 8000, "Unlock plasma weapon", false}
+    };
+
+    // Достижения
+    std::vector<Achievement> achievements;
+    achievements.push_back({ "First Blood", "Destroy first enemy", false, [&enemiesDestroyed]() { return enemiesDestroyed >= 1; } });
+    achievements.push_back({ "Sharpshooter", "Destroy 100 enemies", false, [&enemiesDestroyed]() { return enemiesDestroyed >= 100; } });
+    achievements.push_back({ "Survivor", "Reach level 10", false, [&level]() { return level >= 10; } });
+    achievements.push_back({ "Millionaire", "Score 10000 points", false, [&score]() { return score >= 10000; } });
+    achievements.push_back({ "Combo Master", "Get 10x combo", false, [&combo]() { return combo.comboCount >= 10; } });
+
+    // Контейнеры для объектов
+    std::vector<Bullet> bullets;
+    std::vector<Enemy> enemies;
+    std::vector<Particle> particles;
+    std::vector<PowerUp> powerUps;
+    std::vector<Star> stars;
+    std::vector<Nebula> nebulae;
+    std::vector<Trail> trails;
+
+    // Создание красивого фона
+    // Разноцветные звёзды
+    for (int i = 0; i < 500; i++) {
+        Star star;
+        star.position = {
+            static_cast<float>(rand() % screenWidth),
+            static_cast<float>(rand() % screenHeight)
+        };
+        star.speed = 0.3f + static_cast<float>(rand() % 100) / 100.0f;
+        star.size = 1.0f + static_cast<float>(rand() % 3);
+        star.brightness = 0.3f + static_cast<float>(rand() % 70) / 100.0f;
+
+        int colorType = rand() % 5;
+        switch (colorType) {
+        case 0: star.color = { 255, 255, 255, 255 }; break;
+        case 1: star.color = { 255, 200, 200, 255 }; break;
+        case 2: star.color = { 200, 200, 255, 255 }; break;
+        case 3: star.color = { 255, 255, 200, 255 }; break;
+        case 4: star.color = { 200, 255, 200, 255 }; break;
+        }
+
+        stars.push_back(star);
+    }
+
+    // Туманности
     for (int i = 0; i < 15; i++) {
-        float angle = (float)(rand() % 360) * DEG2RAD;
-        float speedMag = (float)(rand() % 150 + 50);
-        sparks.push_back({
-            center,
-            { (float)(cosf(angle) * speedMag), (float)(sinf(angle) * speedMag) },
-            tileColor,
-            (float)(rand() % 3 + 2),
-            1.0f,
-            (float)(rand() % 40 + 20) / 100.0f
-        });
-    }
-}
+        Nebula nebula;
+        nebula.position = {
+            static_cast<float>(rand() % screenWidth),
+            static_cast<float>(rand() % screenHeight)
+        };
+        nebula.radius = static_cast<float>(rand() % 200 + 100);
+        nebula.alpha = static_cast<float>(rand() % 30 + 10) / 255.0f;
+        nebula.rotation = static_cast<float>(rand() % 360);
+        nebula.rotationSpeed = static_cast<float>(rand() % 20 - 10) / 100.0f;
 
-void UpdateSparks(float dt) {
-    for (int i = 0; i < (int)sparks.size(); ) {
-        sparks[i].position.x += sparks[i].speed.x * dt;
-        sparks[i].position.y += sparks[i].speed.y * dt;
-        sparks[i].life -= dt;
-        sparks[i].alpha = sparks[i].life / 0.5f;
-        if (sparks[i].alpha > 1.0f) sparks[i].alpha = 1.0f;
-
-        if (sparks[i].life <= 0.0f) {
-            sparks.erase(sparks.begin() + i);
-        } else {
-            i++;
+        int colorType = rand() % 5;
+        switch (colorType) {
+        case 0: nebula.color = { 100, 50, 150, 255 }; break;
+        case 1: nebula.color = { 50, 100, 200, 255 }; break;
+        case 2: nebula.color = { 200, 50, 100, 255 }; break;
+        case 3: nebula.color = { 50, 200, 150, 255 }; break;
+        case 4: nebula.color = { 200, 150, 50, 255 }; break;
         }
+
+        nebulae.push_back(nebula);
     }
-}
 
-Color GetTileColor(int value) {
-    switch (value) {
-        case 2:    return GetColor(0xeee4daff);
-        case 4:    return GetColor(0xede0c8ff);
-        case 8:    return GetColor(0xf2b179ff);
-        case 16:   return GetColor(0xf59563ff);
-        case 32:   return GetColor(0xf67c5fff);
-        case 64:   return GetColor(0xf65e3bff);
-        case 128:  return GetColor(0xedcf72ff);
-        case 256:  return GetColor(0xedcc61ff);
-        case 512:  return GetColor(0xedc850ff);
-        case 1024: return GetColor(0xedc53fff);
-        case 2048: return GetColor(0xedc22eff);
-        default:   return GetColor(0x3c3a32ff); 
-    }
-}
+    // Создание солнца
+    Sun sun;
+    sun.position = { screenWidth * 0.8f, screenHeight * 0.2f };
+    sun.radius = 150.0f;
+    sun.coreRadius = 100.0f;
+    sun.outerColor = { 255, 200, 100, 100 };
+    sun.innerColor = { 255, 150, 50, 150 };
+    sun.coreColor = { 255, 255, 200, 255 };
+    sun.pulseTimer = 0.0f;
+    sun.rotationAngle = 0.0f;
 
-Color GetTileTextColor(int value) {
-    return (value <= 4) ? GetColor(0x776e65ff) : RAYWHITE;
-}
+    // Функция создания врага
+    auto CreateEnemy = [screenWidth, screenHeight](int level, EnemyType type = EnemyType::ASTEROID) {
+        Enemy newEnemy;
 
-void AddRandomTile() {
-    vector<pair<int, int> > emptyCells;
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            if (board[i][j].value == 0) emptyCells.push_back(make_pair(i, j));
+        if (type == EnemyType::ASTEROID && level > 2) {
+            int typeRoll = rand() % 100;
+            if (typeRoll < 40) type = EnemyType::ASTEROID;
+            else if (typeRoll < 60) type = EnemyType::FAST_ASTEROID;
+            else if (typeRoll < 75) type = EnemyType::TANK_ASTEROID;
+            else if (typeRoll < 90) type = EnemyType::UFO;
+            else type = EnemyType::SPLITTER;
         }
-    }
-    if (!emptyCells.empty()) {
-        int index = rand() % emptyCells.size();
-        int r = emptyCells[index].first;
-        int c = emptyCells[index].second;
-        
-        board[r][c].value = (rand() % 10 == 0) ? 4 : 2;
-        board[r][c].prevValue = board[r][c].value;
-        board[r][c].currentPos = GetCellScreenPos(r, c);
-        board[r][c].targetPos = board[r][c].currentPos;
-        board[r][c].scale = 0.0f;
-        board[r][c].isMoving = false;
-        board[r][c].justMerged = false;
-    }
-}
 
-void RestartGame() {
-    score = 0;
-    sparks.clear();
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            board[i][j] = Tile();
-        }
-    }
-    AddRandomTile();
-    AddRandomTile();
-}
+        newEnemy.type = type;
+        newEnemy.active = true;
+        newEnemy.shootTimer = 0.0f;
+        newEnemy.shootInterval = 1.5f + (rand() % 100) / 50.0f;
 
-void SlideLine(int lineIndex, Tile* activeLine[SIZE]) {
-    for (int i = 0; i < SIZE; i++) {
-        if (activeLine[i]->value == 0) continue;
-        int target = i;
-        while (target > 0 && activeLine[target - 1]->value == 0) {
-            target--;
-        }
-        if (target != i) {
-            activeLine[target]->value = activeLine[i]->value;
-            activeLine[target]->currentPos = activeLine[i]->currentPos;
-            activeLine[target]->scale = activeLine[i]->scale;
-            activeLine[i]->value = 0;
-        }
-    }
+        switch (type) {
+        case EnemyType::ASTEROID:
+            newEnemy.position = { static_cast<float>(rand() % screenWidth), -50.0f };
+            newEnemy.velocity = {
+                static_cast<float>(rand() % 100 - 50) / 100.0f,
+                static_cast<float>(rand() % 100) / 100.0f * (2.0f + level * 0.5f)
+            };
+            newEnemy.radius = static_cast<float>(rand() % 20 + 15 + level * 2);
+            newEnemy.health = 1 + (level / 3);
+            newEnemy.color = { 169, 169, 169, 255 };
+            newEnemy.scoreValue = 100;
+            break;
 
-    for (int i = 0; i < SIZE - 1; i++) {
-        if (activeLine[i]->value != 0 && activeLine[i]->value == activeLine[i + 1]->value) {
-            activeLine[i]->value *= 2;
-            score += activeLine[i]->value;
-            if (score > highScore) { 
-                highScore = score; 
-                SaveHighScore(); 
+        case EnemyType::FAST_ASTEROID:
+            newEnemy.position = { static_cast<float>(rand() % screenWidth), -30.0f };
+            newEnemy.velocity = {
+                static_cast<float>(rand() % 200 - 100) / 100.0f,
+                static_cast<float>(rand() % 100) / 100.0f * (4.0f + level * 0.5f)
+            };
+            newEnemy.radius = static_cast<float>(rand() % 10 + 8);
+            newEnemy.health = 1;
+            newEnemy.color = { 255, 200, 100, 255 };
+            newEnemy.scoreValue = 150;
+            break;
+
+        case EnemyType::TANK_ASTEROID:
+            newEnemy.position = { static_cast<float>(rand() % screenWidth), -60.0f };
+            newEnemy.velocity = {
+                static_cast<float>(rand() % 40 - 20) / 100.0f,
+                static_cast<float>(rand() % 50) / 100.0f * (1.5f + level * 0.3f)
+            };
+            newEnemy.radius = static_cast<float>(rand() % 20 + 30);
+            newEnemy.health = 3 + (level / 2);
+            newEnemy.color = { 100, 100, 150, 255 };
+            newEnemy.scoreValue = 300;
+            break;
+
+        case EnemyType::UFO:
+            newEnemy.position = { static_cast<float>(rand() % screenWidth), 50.0f };
+            newEnemy.velocity = {
+                static_cast<float>(rand() % 100 - 50) / 50.0f * (1.0f + level * 0.2f),
+                0.5f
+            };
+            newEnemy.radius = 25.0f;
+            newEnemy.health = 2;
+            newEnemy.color = { 200, 100, 255, 255 };
+            newEnemy.scoreValue = 500;
+            break;
+
+        case EnemyType::SPLITTER:
+            newEnemy.position = { static_cast<float>(rand() % screenWidth), -40.0f };
+            newEnemy.velocity = {
+                static_cast<float>(rand() % 60 - 30) / 100.0f,
+                static_cast<float>(rand() % 80) / 100.0f * (2.5f + level * 0.4f)
+            };
+            newEnemy.radius = 30.0f;
+            newEnemy.health = 1;
+            newEnemy.color = { 100, 255, 100, 255 };
+            newEnemy.scoreValue = 200;
+            break;
+        }
+
+        newEnemy.maxHealth = newEnemy.health;
+        newEnemy.rotation = static_cast<float>(rand() % 360);
+        newEnemy.rotationSpeed = static_cast<float>(rand() % 100 - 50) / 20.0f;
+
+        return newEnemy;
+        };
+
+    // Функция создания взрыва
+    auto CreateExplosion = [&particles](Vector2 position, Color baseColor, int count = 20) {
+        for (int i = 0; i < count; i++) {
+            Particle newParticle;
+            newParticle.position = position;
+            float angle = static_cast<float>(rand() % 360) * DEG2RAD;
+            float speed = static_cast<float>(rand() % 300 + 100);
+            newParticle.velocity = {
+                cos(angle) * speed,
+                sin(angle) * speed
+            };
+            newParticle.maxLifeTime = static_cast<float>(rand() % 100 + 50) / 100.0f;
+            newParticle.lifeTime = newParticle.maxLifeTime;
+            newParticle.size = static_cast<float>(rand() % 6 + 3);
+
+            int colorShift = rand() % 100 - 50;
+            newParticle.color = {
+                static_cast<unsigned char>(std::min(255, std::max(0, static_cast<int>(baseColor.r) + colorShift))),
+                static_cast<unsigned char>(std::min(255, std::max(0, static_cast<int>(baseColor.g) + colorShift))),
+                static_cast<unsigned char>(std::min(255, std::max(0, static_cast<int>(baseColor.b) + colorShift))),
+                255
+            };
+
+            particles.push_back(newParticle);
+        }
+        };
+
+    // Функция создания бонуса
+    auto CreatePowerUp = [](Vector2 position) {
+        PowerUp newPowerUp;
+        newPowerUp.position = position;
+        newPowerUp.velocity = { 0.0f, 2.0f };
+        newPowerUp.radius = 20.0f;
+        newPowerUp.active = true;
+        newPowerUp.lifeTime = 10.0f;
+        newPowerUp.bobTimer = 0.0f;
+
+        int typeRoll = rand() % 100;
+        if (typeRoll < 30) newPowerUp.type = PowerUpType::HEALTH;
+        else if (typeRoll < 50) newPowerUp.type = PowerUpType::TRIPLE_SHOT;
+        else if (typeRoll < 70) newPowerUp.type = PowerUpType::RAPID_FIRE;
+        else if (typeRoll < 85) newPowerUp.type = PowerUpType::SHIELD;
+        else newPowerUp.type = PowerUpType::SCORE_BOOST;
+
+        return newPowerUp;
+        };
+
+    // Функция спавна врагов
+    auto SpawnEnemies = [&enemies, &CreateEnemy](int level) {
+        int count = 3 + level;
+        for (int i = 0; i < count; i++) {
+            enemies.push_back(CreateEnemy(level));
+        }
+        };
+
+    // Функция создания босса
+    auto CreateBoss = [&boss, screenWidth](int level) {
+        boss.position = { static_cast<float>(screenWidth) / 2.0f, -100.0f };
+        boss.radius = 80.0f;
+        boss.maxHealth = 100 + level * 50;
+        boss.health = boss.maxHealth;
+        boss.phase = 0.0f;
+        boss.attackTimer = 0.0f;
+        boss.active = true;
+        boss.movementTimer = 0.0f;
+        };
+
+    // Функция сохранения рекорда
+    auto SaveHighScore = [](int score, int level, int enemiesDestroyed) {
+        std::ofstream file("highscores.txt", std::ios::app);
+        if (file.is_open()) {
+            file << score << " " << level << " " << enemiesDestroyed << std::endl;
+            file.close();
+        }
+        };
+
+    // Функция загрузки рекордов
+    auto LoadHighScores = []() {
+        std::vector<ScoreEntry> scores;
+        std::ifstream file("highscores.txt");
+        if (file.is_open()) {
+            ScoreEntry entry;
+            while (file >> entry.score >> entry.level >> entry.enemiesDestroyed) {
+                scores.push_back(entry);
             }
-            
-            activeLine[i]->justMerged = true;
-            activeLine[i + 1]->value = 0;
+            file.close();
+        }
+        std::sort(scores.begin(), scores.end(),
+            [](const ScoreEntry& a, const ScoreEntry& b) { return a.score > b.score; });
+        return scores;
+        };
 
-            for (int j = i + 1; j < SIZE - 1; j++) {
-                activeLine[j]->value = activeLine[j + 1]->value;
-                activeLine[j]->currentPos = activeLine[j + 1]->currentPos;
-                activeLine[j]->scale = activeLine[j + 1]->scale;
-                activeLine[j + 1]->value = 0;
+    // Функция сброса игры
+    auto ResetGame = [&]() {
+        score = 0;
+        level = 1;
+        enemiesDestroyed = 0;
+        currency = 0;
+        gameOver = false;
+        gamePaused = false;
+        gameOverTimer = 0.0f;
+        levelTimer = 0.0f;
+        invincibilityTimer = 0.0f;
+        screenShakeTimer = 0.0f;
+        timeAttackTimer = 60.0f;
+
+        stats.totalShots = 0;
+        stats.totalHits = 0;
+        stats.accuracy = 0.0f;
+        stats.powerUpsCollected = 0;
+        stats.bossesDefeated = 0;
+        stats.gameTime = 0.0f;
+        stats.maxLevelReached = 1;
+
+        player.lives = player.maxLives;
+        player.position = { static_cast<float>(screenWidth) / 2.0f,
+                           static_cast<float>(screenHeight) - 150.0f };
+        player.hasShield = false;
+        player.hasTripleShot = false;
+        player.hasRapidFire = false;
+        player.hasScoreBoost = false;
+
+        combo.Reset();
+        boss.active = false;
+
+        bullets.clear();
+        enemies.clear();
+        particles.clear();
+        powerUps.clear();
+        trails.clear();
+
+        SpawnEnemies(level);
+        };
+
+    // Начальный спавн
+    SpawnEnemies(level);
+
+    // Главный игровой цикл
+    while (!WindowShouldClose())
+    {
+        float frameTime = GetFrameTime();
+
+        // Обновление времени игры
+        if (gameState == GameState::PLAYING && !gamePaused && !gameOver) {
+            stats.gameTime += frameTime;
+        }
+
+        // Обновление солнца
+        sun.pulseTimer += frameTime;
+        sun.rotationAngle += frameTime * 10.0f;
+
+        // === ОБРАБОТКА ВВОДА ===
+        if (gameState == GameState::MENU) {
+            if (IsKeyPressed(KEY_ENTER)) {
+                gameState = GameState::PLAYING;
+                ResetGame();
+            }
+            if (IsKeyPressed(KEY_H)) {
+                gameState = GameState::HIGH_SCORES;
+            }
+            if (IsKeyPressed(KEY_S)) {
+                gameState = GameState::SHOP;
             }
         }
-    }
-}
-
-void GetLinePointers(int dir, int index, Tile* activeLine[SIZE]) {
-    for (int i = 0; i < SIZE; i++) {
-        if (dir == 0)      activeLine[i] = &board[index][i];
-        else if (dir == 1) activeLine[i] = &board[SIZE - 1 - i][index];
-        else if (dir == 2) activeLine[i] = &board[index][SIZE - 1 - i];
-        else if (dir == 3) activeLine[i] = &board[i][index];
-    }
-}
-
-bool MakeMove(int key) {
-    int dir = -1;
-    if (key == KEY_LEFT || key == KEY_A) dir = 0;
-    else if (key == KEY_DOWN || key == KEY_S) dir = 1;
-    else if (key == KEY_RIGHT || key == KEY_D) dir = 2;
-    else if (key == KEY_UP || key == KEY_W) dir = 3;
-    if (dir == -1) return false;
-
-    int backup[SIZE][SIZE];
-    for (int i = 0; i < SIZE; i++)
-        for (int j = 0; j < SIZE; j++)
-            backup[i][j] = board[i][j].value;
-
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            board[i][j].justMerged = false;
-        }
-    }
-
-    for (int i = 0; i < SIZE; i++) {
-        Tile* activeLine[SIZE];
-        GetLinePointers(dir, i, activeLine);
-        SlideLine(i, activeLine);
-    }
-
-    bool changed = false;
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            board[i][j].targetPos = GetCellScreenPos(i, j);
-            if (board[i][j].value != 0) {
-                board[i][j].isMoving = true;
+        else if (gameState == GameState::HIGH_SCORES || gameState == GameState::SHOP) {
+            if (IsKeyPressed(KEY_ESCAPE)) {
+                gameState = GameState::MENU;
             }
-            if (board[i][j].value != backup[i][j]) changed = true;
         }
-    }
-
-    return changed;
-}
-
-bool IsGameOver() {
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            if (board[i][j].value == 0) return false;
-            if (i < SIZE - 1 && board[i][j].value == board[i + 1][j].value) return false;
-            if (j < SIZE - 1 && board[i][j].value == board[i][j + 1].value) return false;
-        }
-    }
-    return true;
-}
-
-void UpdateAnimation(float dt) {
-    const float SPEED = 800.0f;
-    const float SCALE_SPEED = 5.0f;
-
-    for (int i = 0; i < SIZE; i++) {
-        for (int j = 0; j < SIZE; j++) {
-            Tile &t = board[i][j];
-
-            if (t.value != 0 && t.scale < 1.0f) {
-                t.scale += SCALE_SPEED * dt;
-                if (t.scale > 1.0f) t.scale = 1.0f;
+        else if (gameState == GameState::PLAYING) {
+            if (IsKeyPressed(KEY_P)) {
+                gamePaused = !gamePaused;
+                gameState = gamePaused ? GameState::PAUSED : GameState::PLAYING;
             }
 
-            if (t.isMoving) {
-                float dx = t.targetPos.x - t.currentPos.x;
-                float dy = t.targetPos.y - t.currentPos.y;
-                float dist = sqrtf(dx*dx + dy*dy);
-                float step = SPEED * dt;
+            if (!gamePaused && !gameOver) {
+                // Движение игрока - WASD управление
+                Vector2 movement = { 0.0f, 0.0f };
+                if (IsKeyDown(KEY_D)) movement.x += 1.0f;
+                if (IsKeyDown(KEY_A)) movement.x -= 1.0f;
+                if (IsKeyDown(KEY_W)) movement.y -= 1.0f;
+                if (IsKeyDown(KEY_S)) movement.y += 1.0f;
 
-                if (dist <= step) {
-                    t.currentPos = t.targetPos;
-                    t.isMoving = false;
-                    
-                    if (t.justMerged) {
-                        CreateSparksExplosion(t.currentPos, GetTileColor(t.value));
-                        t.justMerged = false;
-                    }
-                } else {
-                    t.currentPos.x += (dx / dist) * step;
-                    t.currentPos.y += (dy / dist) * step;
+                if (movement.x != 0.0f && movement.y != 0.0f) {
+                    movement.x *= 0.707f;
+                    movement.y *= 0.707f;
                 }
-            } else {
-                t.currentPos = GetCellScreenPos(i, j);
+
+                player.position.x += movement.x * player.speed;
+                player.position.y += movement.y * player.speed;
+
+                if (player.position.x < player.radius) player.position.x = player.radius;
+                if (player.position.x > screenWidth - player.radius) player.position.x = screenWidth - player.radius;
+                if (player.position.y < player.radius) player.position.y = player.radius;
+                if (player.position.y > screenHeight - player.radius) player.position.y = screenHeight - player.radius;
+
+                // Стрельба
+                player.shootCooldown -= frameTime;
+                float currentShootDelay = player.hasRapidFire ? player.baseShootDelay * 0.5f : player.baseShootDelay;
+
+                if ((IsKeyDown(KEY_SPACE) || IsKeyDown(KEY_LEFT_CONTROL)) && player.shootCooldown <= 0.0f) {
+                    stats.totalShots++;
+
+                    switch (player.weaponType) {
+                    case WeaponType::BASIC:
+                        if (player.hasTripleShot) {
+                            for (int i = -1; i <= 1; i++) {
+                                Bullet newBullet;
+                                newBullet.position = { player.position.x + i * 20.0f, player.position.y - player.radius };
+                                newBullet.velocity = { i * 2.0f, -15.0f };
+                                newBullet.radius = 6.0f;
+                                newBullet.active = true;
+                                newBullet.lifeTime = 3.0f;
+                                newBullet.damage = 1;
+                                newBullet.color = YELLOW;
+                                newBullet.isEnemyBullet = false;
+                                newBullet.isHoming = false;
+                                bullets.push_back(newBullet);
+                            }
+                        }
+                        else {
+                            Bullet newBullet;
+                            newBullet.position = { player.position.x, player.position.y - player.radius };
+                            newBullet.velocity = { 0.0f, -15.0f };
+                            newBullet.radius = 6.0f;
+                            newBullet.active = true;
+                            newBullet.lifeTime = 3.0f;
+                            newBullet.damage = 1;
+                            newBullet.color = YELLOW;
+                            newBullet.isEnemyBullet = false;
+                            newBullet.isHoming = false;
+                            bullets.push_back(newBullet);
+                        }
+                        break;
+
+                    case WeaponType::SPREAD:
+                        for (int i = -2; i <= 2; i++) {
+                            Bullet newBullet;
+                            newBullet.position = { player.position.x, player.position.y - player.radius };
+                            newBullet.velocity = { i * 3.0f, -15.0f + std::abs(i) * 2.0f };
+                            newBullet.radius = 5.0f;
+                            newBullet.active = true;
+                            newBullet.lifeTime = 2.5f;
+                            newBullet.damage = 1;
+                            newBullet.color = { 255, 150, 0, 255 };
+                            newBullet.isEnemyBullet = false;
+                            newBullet.isHoming = false;
+                            bullets.push_back(newBullet);
+                        }
+                        break;
+
+                    case WeaponType::LASER:
+                    {
+                        Bullet newBullet;
+                        newBullet.position = { player.position.x, player.position.y - player.radius };
+                        newBullet.velocity = { 0.0f, -25.0f };
+                        newBullet.radius = 4.0f;
+                        newBullet.active = true;
+                        newBullet.lifeTime = 2.0f;
+                        newBullet.damage = 3;
+                        newBullet.color = { 255, 0, 0, 255 };
+                        newBullet.isEnemyBullet = false;
+                        newBullet.isHoming = false;
+                        bullets.push_back(newBullet);
+                    }
+                    break;
+
+                    case WeaponType::PLASMA:
+                    {
+                        Bullet newBullet;
+                        newBullet.position = { player.position.x, player.position.y - player.radius };
+                        newBullet.velocity = { 0.0f, -20.0f };
+                        newBullet.radius = 10.0f;
+                        newBullet.active = true;
+                        newBullet.lifeTime = 3.0f;
+                        newBullet.damage = 2;
+                        newBullet.color = { 0, 255, 0, 255 };
+                        newBullet.isEnemyBullet = false;
+                        newBullet.isHoming = false;
+                        bullets.push_back(newBullet);
+                    }
+                    break;
+                    }
+
+                    player.shootCooldown = currentShootDelay;
+                }
+
+                // Специальные способности
+                if (IsKeyPressed(KEY_ONE) && nukeAbility.isReady) {
+                    nukeAbility.isReady = false;
+                    nukeAbility.currentCooldown = nukeAbility.cooldown;
+                    for (auto& enemy : enemies) {
+                        enemy.active = false;
+                        CreateExplosion(enemy.position, enemy.color, 50);
+                        score += enemy.scoreValue;
+                        enemiesDestroyed++;
+                    }
+                }
+
+                if (IsKeyPressed(KEY_TWO) && slowAbility.isReady) {
+                    slowAbility.isReady = false;
+                    slowAbility.currentCooldown = slowAbility.cooldown;
+                    for (auto& enemy : enemies) {
+                        enemy.velocity.x *= 0.3f;
+                        enemy.velocity.y *= 0.3f;
+                    }
+                }
+
+                if (IsKeyPressed(KEY_THREE) && invincibleAbility.isReady) {
+                    invincibleAbility.isReady = false;
+                    invincibleAbility.currentCooldown = invincibleAbility.cooldown;
+                    invincibilityTimer = 5.0f;
+                }
+
+                if (IsKeyPressed(KEY_FOUR) && healAbility.isReady) {
+                    healAbility.isReady = false;
+                    healAbility.currentCooldown = healAbility.cooldown;
+                    player.lives = player.maxLives;
+                }
+
+                // Обновление кулдаунов способностей
+                if (!nukeAbility.isReady) {
+                    nukeAbility.currentCooldown -= frameTime;
+                    if (nukeAbility.currentCooldown <= 0) nukeAbility.isReady = true;
+                }
+                if (!slowAbility.isReady) {
+                    slowAbility.currentCooldown -= frameTime;
+                    if (slowAbility.currentCooldown <= 0) slowAbility.isReady = true;
+                }
+                if (!invincibleAbility.isReady) {
+                    invincibleAbility.currentCooldown -= frameTime;
+                    if (invincibleAbility.currentCooldown <= 0) invincibleAbility.isReady = true;
+                }
+                if (!healAbility.isReady) {
+                    healAbility.currentCooldown -= frameTime;
+                    if (healAbility.currentCooldown <= 0) healAbility.isReady = true;
+                }
+
+                // Обновление таймеров бонусов
+                if (player.hasTripleShot) {
+                    player.tripleShotTimer -= frameTime;
+                    if (player.tripleShotTimer <= 0) player.hasTripleShot = false;
+                }
+                if (player.hasRapidFire) {
+                    player.rapidFireTimer -= frameTime;
+                    if (player.rapidFireTimer <= 0) player.hasRapidFire = false;
+                }
+                if (player.hasScoreBoost) {
+                    player.scoreBoostTimer -= frameTime;
+                    if (player.scoreBoostTimer <= 0) player.hasScoreBoost = false;
+                }
+                if (player.hasShield) {
+                    player.shieldTimer -= frameTime;
+                    if (player.shieldTimer <= 0) player.hasShield = false;
+                }
+
+                if (invincibilityTimer > 0) invincibilityTimer -= frameTime;
+
+                // Обновление комбо
+                combo.Update();
+
+                // Обновление уровня
+                levelTimer += frameTime;
+                if (levelTimer >= 10.0f) {
+                    levelTimer = 0.0f;
+                    level++;
+                    stats.maxLevelReached = level;
+                    SpawnEnemies(level);
+
+                    if (level % 5 == 0) {
+                        CreateBoss(level);
+                    }
+                }
+
+                // Таймер режима Time Attack
+                if (gameMode == GameMode::TIME_ATTACK) {
+                    timeAttackTimer -= frameTime;
+                    if (timeAttackTimer <= 0) {
+                        gameOver = true;
+                        gameOverTimer = 0.0f;
+                    }
+                }
             }
         }
-    }
-}
+        else if (gameState == GameState::PAUSED) {
+            if (IsKeyPressed(KEY_P)) {
+                gamePaused = false;
+                gameState = GameState::PLAYING;
+            }
+            if (IsKeyPressed(KEY_ESCAPE)) {
+                gameState = GameState::MENU;
+            }
+        }
+        else if (gameState == GameState::GAME_OVER) {
+            if (IsKeyPressed(KEY_SPACE) && gameOverTimer > 1.0f) {
+                ResetGame();
+                gameState = GameState::PLAYING;
+            }
+            if (IsKeyPressed(KEY_ESCAPE)) {
+                gameState = GameState::MENU;
+            }
+        }
 
-void DrawSpaceBackground(float time) {
-    Color spaceDark = { 4, 4, 10, 255 };
-Color spaceBlue = { 12, 18, 40, 255 };DrawRectangleGradientV(0, 0, screenWidth, screenHeight, spaceDark, spaceBlue);for (int i = 0; i < (int)stars.size(); i++) {const Star &s = stars[i];DrawCircleV(s.position, s.radius, Fade(RAYWHITE, s.currentAlpha));}Vector2 moonPos = { (float)screenWidth - 250.0f, 220.0f };float moonRadius = 110.0f;BeginBlendMode(BLEND_ADDITIVE);float pulse = (sinf(time * 1.5f) + 1.0f) / 2.0f;for (int i = 1; i <= 35; i++) {float alpha = (0.035f - ((float)i * 0.0009f)) + pulse * 0.005f;if (alpha < 0.0f) alpha = 0.0f;DrawCircleV(moonPos, moonRadius + (float)i * 2.8f, Fade(GetColor(0x38bdf8ff), alpha * 1.6f));DrawCircleV(moonPos, moonRadius + (float)i * 1.4f, Fade(RAYWHITE, alpha * 0.8f));}EndBlendMode();DrawCircleV(moonPos, moonRadius, GetColor(0xfffbebff));DrawCircleV(moonPos, moonRadius, Fade(GetColor(0xe0f2feff), 0.5f));float cratersData[8][3] = {{ moonPos.x - 35.0f, moonPos.y - 25.0f, 24.0f },{ moonPos.x + 45.0f, moonPos.y + 15.0f, 16.0f },{ moonPos.x - 12.0f, moonPos.y + 50.0f, 19.0f },{ moonPos.x + 15.0f, moonPos.y - 55.0f, 13.0f },{ moonPos.x - 60.0f, moonPos.y + 20.0f, 11.0f },{ moonPos.x - 15.0f, moonPos.y - 65.0f, 15.0f },{ moonPos.x + 55.0f, moonPos.y - 30.0f, 10.0f },{ moonPos.x + 10.0f, moonPos.y + 70.0f, 12.0f }};Color baseCrater = GetColor(0xcbd5e1ff);Color shadowCrater = GetColor(0x64748bff);Color lightRim = GetColor(0xffffffff);for (int i = 0; i < 8; i++) {Vector2 cPos = { cratersData[i][0], cratersData[i][1] };float r = cratersData[i][2];DrawCircleV({ cPos.x - 1.5f, cPos.y - 1.5f }, r + 1.0f, Fade(lightRim, 0.6f));DrawCircleV(cPos, r, Fade(baseCrater, 0.6f));DrawCircleV({ cPos.x + 2.0f, cPos.y + 2.0f }, r - 1.5f, Fade(shadowCrater, 0.45f));}DrawLineEx({ moonPos.x - 35.0f, moonPos.y - 25.0f }, { moonPos.x - 80.0f, moonPos.y - 10.0f }, 1.5f, Fade(lightRim, 0.25f));DrawLineEx({ moonPos.x - 35.0f, moonPos.y - 25.0f }, { moonPos.x + 10.0f, moonPos.y - 5.0f }, 1.5f, Fade(lightRim, 0.25f));DrawLineEx({ moonPos.x - 35.0f, moonPos.y - 25.0f }, { moonPos.x - 20.0f, moonPos.y + 30.0f }, 1.5f, Fade(lightRim, 0.25f));for (int i = 0; i < 40; i++) {float factor = (float)i / 40.0f;float shadowAlpha = 0.015f + (factor * 0.012f);float shadowOffset = factor * 45.0f;DrawCircleSector({ moonPos.x + shadowOffset, moonPos.y }, moonRadius + 2.0f, 90.0f, 270.0f, 0, Fade(GetColor(0x090d1fff), shadowAlpha));}DrawCircleSector(moonPos, moonRadius, 90.0f, 270.0f, 0, Fade(GetColor(0x38bdf8ff), 0.04f));}int main(){srand((unsigned int)time(0));InitWindow(0, 0, "2048 - Space 4K Edition");ToggleFullscreen();SetTargetFPS(60);screenWidth = GetScreenWidth();screenHeight = GetScreenHeight();int boardWidth = CELL_SIZE * SIZE + PADDING * (SIZE + 1);boardOffsetX = (screenWidth - boardWidth) / 2;boardOffsetY = (screenHeight - boardWidth) / 2 + 60;restartBtn.rect = { (float)boardOffsetX, (float)boardOffsetY - 75.0f, 160.0f, 45.0f };restartBtn.text = "RESTART";restartBtn.isHovered = false;LoadHighScore();InitStars();RestartGame();Color boardBgColor = { 30, 41, 59, 230 };Color emptyCellColor = { 51, 65, 85, 255 };while (WindowShouldClose() == false){float dt = GetFrameTime();Vector2 mousePos = GetMousePosition();restartBtn.isHovered = CheckCollisionPointRec(mousePos, restartBtn.rect);if (restartBtn.isHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {RestartGame();}int keyPressed = GetKeyPressed();if (keyPressed != 0) {if (MakeMove(keyPressed)) {AddRandomTile();}}UpdateStars(dt);UpdateSparks(dt);UpdateAnimation(dt);float runTime = (float)GetTime();BeginDrawing();DrawSpaceBackground(runTime);DrawText("2048", boardOffsetX + 2, boardOffsetY - 150, 65, GetColor(0x0f172aff));DrawText("2048", boardOffsetX, boardOffsetY - 152, 65, RAYWHITE);string scoreText = "SCORE: " + IntToString(score);string hiScoreText = "BEST: " + IntToString(highScore);DrawText(scoreText.c_str(), boardOffsetX + 330, boardOffsetY - 145, 22, GetColor(0x38bdf8ff));DrawText(hiScoreText.c_str(), boardOffsetX + 330, boardOffsetY - 115, 22, GetColor(0xa855f7ff));DrawRectangle(boardOffsetX, boardOffsetY, boardWidth, boardWidth, boardBgColor);for (int i = 0; i < SIZE; i++) {for (int j = 0; j < SIZE; j++) {Vector2 staticPos = GetCellScreenPos(i, j);DrawRectangle((int)staticPos.x, (int)staticPos.y, CELL_SIZE, CELL_SIZE, emptyCellColor);}}Color btnColor = restartBtn.isHovered ? GetColor(0x3b82f6ff) : GetColor(0x1d4ed8ff);DrawRectangleRounded(restartBtn.rect, 0.25f, 4, btnColor);int textW = MeasureText(restartBtn.text.c_str(), 16);DrawText(restartBtn.text.c_str(), (int)restartBtn.rect.x + ((int)restartBtn.rect.width - textW)/2, (int)restartBtn.rect.y + 14, 16, RAYWHITE);for (int i = 0; i < SIZE; i++) {for (int j = 0; j < SIZE; j++) {Tile &t = board[i][j];if (t.value == 0) continue;float animatedSize = (float)CELL_SIZE * t.scale;float offset = ((float)CELL_SIZE - animatedSize) / 2.0f;DrawRectangle((int)(t.currentPos.x + offset), (int)(t.currentPos.y + offset), (int)animatedSize, (int)animatedSize, GetTileColor(t.value));if (t.scale >= 0.5f) {string valStr = IntToString(t.value);int fontSize = (t.value >= 1024) ? 30 : 40;fontSize = (int)((float)fontSize * t.scale);if (fontSize < 1) fontSize = 1;int textWidth = MeasureText(valStr.c_str(), fontSize);int textX = (int)t.currentPos.x + (CELL_SIZE - textWidth) / 2;int textY = (int)t.currentPos.y + (CELL_SIZE - fontSize) / 2;DrawText(valStr.c_str(), textX, textY, fontSize, GetTileTextColor(t.value));}}}for (int i = 0; i < (int)sparks.size(); i++) {DrawCircleV(sparks[i].position, sparks[i].radius, Fade(sparks[i].color, sparks[i].alpha));}DrawText("Press ESC to Exit", 20, screenHeight - 40, 20, GRAY);if (IsGameOver()) {DrawRectangle(boardOffsetX, boardOffsetY, boardWidth, boardWidth, Fade(BLACK, 0.75f));DrawText("GAME OVER", boardOffsetX + 110, boardOffsetY + 220, 50, RED);}EndDrawing();}CloseWindow();return 0;}// ЭТОТ БЛОК ПЕРЕНАПРАВЛЯЕТ ВЫЗОВ И РЕШАЕТ ОШИБКУ LINKER РАЗ И НАВСЕГДА#ifdef _WIN32#include <windows.h>int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {return main();}#endif
+        // === ОБНОВЛЕНИЕ ===
+        if (gameState == GameState::PLAYING && !gamePaused && !gameOver) {
+            // Обновление звёзд
+            for (auto& star : stars) {
+                star.position.y += star.speed;
+                if (star.position.y > screenHeight) {
+                    star.position.y = 0;
+                    star.position.x = rand() % screenWidth;
+                }
+            }
+
+            // Обновление туманностей
+            for (auto& nebula : nebulae) {
+                nebula.rotation += nebula.rotationSpeed;
+            }
+
+            // Обновление пуль
+            for (auto& bullet : bullets) {
+                if (!bullet.active) continue;
+
+                if (bullet.isHoming) {
+                    float dx = bullet.target.x - bullet.position.x;
+                    float dy = bullet.target.y - bullet.position.y;
+                    float length = sqrt(dx * dx + dy * dy);
+                    if (length > 0) {
+                        bullet.velocity.x += (dx / length) * 0.5f;
+                        bullet.velocity.y += (dy / length) * 0.5f;
+                    }
+                }
+
+                bullet.position.x += bullet.velocity.x;
+                bullet.position.y += bullet.velocity.y;
+                bullet.lifeTime -= frameTime;
+
+                if (bullet.position.y < -10 || bullet.position.y > screenHeight + 10 ||
+                    bullet.position.x < -10 || bullet.position.x > screenWidth + 10 ||
+                    bullet.lifeTime <= 0) {
+                    bullet.active = false;
+                }
+            }
+
+            // Обновление врагов
+            for (auto& enemy : enemies) {
+                if (!enemy.active) continue;
+
+                enemy.position.x += enemy.velocity.x;
+                enemy.position.y += enemy.velocity.y;
+                enemy.rotation += enemy.rotationSpeed;
+
+                if (enemy.type == EnemyType::UFO) {
+                    enemy.shootTimer += frameTime;
+                    if (enemy.shootTimer >= enemy.shootInterval && enemy.position.y > 0) {
+                        enemy.shootTimer = 0;
+
+                        Bullet enemyBullet;
+                        enemyBullet.position = enemy.position;
+                        float dx = player.position.x - enemy.position.x;
+                        float dy = player.position.y - enemy.position.y;
+                        float length = sqrt(dx * dx + dy * dy);
+                        if (length > 0) {
+                            dx /= length;
+                            dy /= length;
+                        }
+                        enemyBullet.velocity = { dx * 7.0f, dy * 7.0f };
+                        enemyBullet.radius = 5.0f;
+                        enemyBullet.active = true;
+                        enemyBullet.lifeTime = 5.0f;
+                        enemyBullet.damage = 1;
+                        enemyBullet.color = { 255, 100, 100, 255 };
+                        enemyBullet.isEnemyBullet = true;
+                        enemyBullet.isHoming = false;
+                        bullets.push_back(enemyBullet);
+                    }
+                }
+
+                if (enemy.position.y > screenHeight + enemy.radius) {
+                    enemy.position.y = -enemy.radius;
+                    enemy.position.x = rand() % screenWidth;
+                }
+                if (enemy.position.x < -enemy.radius) {
+                    enemy.position.x = screenWidth + enemy.radius;
+                }
+                if (enemy.position.x > screenWidth + enemy.radius) {
+                    enemy.position.x = -enemy.radius;
+                }
+            }
+
+            // Обновление босса
+            if (boss.active) {
+                boss.movementTimer += frameTime;
+                boss.attackTimer += frameTime;
+
+                boss.position.x = screenWidth / 2 + sin(boss.movementTimer * 0.5f) * 400;
+                if (boss.position.y < 150) {
+                    boss.position.y += 1.0f;
+                }
+
+                if (boss.attackTimer >= 2.0f) {
+                    boss.attackTimer = 0;
+                    for (int i = -3; i <= 3; i++) {
+                        Bullet bossBullet;
+                        bossBullet.position = boss.position;
+                        bossBullet.velocity = { i * 2.0f, 5.0f };
+                        bossBullet.radius = 8.0f;
+                        bossBullet.active = true;
+                        bossBullet.lifeTime = 4.0f;
+                        bossBullet.damage = 2;
+                        bossBullet.color = { 255, 0, 255, 255 };
+                        bossBullet.isEnemyBullet = true;
+                        bossBullet.isHoming = false;
+                        bullets.push_back(bossBullet);
+                    }
+                }
+
+                if (boss.health <= 0) {
+                    boss.active = false;
+                    score += 5000;
+                    currency += 1000;
+                    stats.bossesDefeated++;
+                    CreateExplosion(boss.position, { 255, 0, 255, 255 }, 100);
+                }
+            }
+
+            // Проверка столкновений пуль с врагами
+            for (auto& bullet : bullets) {
+                if (!bullet.active || bullet.isEnemyBullet) continue;
+
+                for (auto& enemy : enemies) {
+                    if (!enemy.active) continue;
+
+                    float dx = bullet.position.x - enemy.position.x;
+                    float dy = bullet.position.y - enemy.position.y;
+                    float distance = sqrt(dx * dx + dy * dy);
+
+                    if (distance < bullet.radius + enemy.radius) {
+                        bullet.active = false;
+                        enemy.health -= bullet.damage;
+                        stats.totalHits++;
+
+                        if (enemy.health <= 0) {
+                            enemy.active = false;
+                            int scoreMultiplier = player.hasScoreBoost ? 2 : 1;
+                            int finalScore = enemy.scoreValue * scoreMultiplier * combo.comboMultiplier;
+                            score += finalScore;
+                            currency += enemy.scoreValue / 10;
+                            enemiesDestroyed++;
+                            combo.AddKill();
+                            CreateExplosion(enemy.position, enemy.color, 30);
+
+                            if (enemy.type == EnemyType::SPLITTER) {
+                                for (int i = 0; i < 3; i++) {
+                                    Enemy splitEnemy = CreateEnemy(level, EnemyType::FAST_ASTEROID);
+                                    splitEnemy.position = enemy.position;
+                                    splitEnemy.velocity = {
+                                        static_cast<float>(rand() % 200 - 100) / 50.0f,
+                                        static_cast<float>(rand() % 200 - 100) / 50.0f
+                                    };
+                                    enemies.push_back(splitEnemy);
+                                }
+                            }
+
+                            if (rand() % 100 < 20) {
+                                powerUps.push_back(CreatePowerUp(enemy.position));
+                            }
+                        }
+                        else {
+                            CreateExplosion(bullet.position, { 255, 255, 255, 255 }, 5);
+                        }
+                    }
+                }
+
+                if (boss.active && bullet.active) {
+                    float dx = bullet.position.x - boss.position.x;
+                    float dy = bullet.position.y - boss.position.y;
+                    float distance = sqrt(dx * dx + dy * dy);
+
+                    if (distance < bullet.radius + boss.radius) {
+                        bullet.active = false;
+                        boss.health -= bullet.damage;
+                        stats.totalHits++;
+                        CreateExplosion(bullet.position, { 255, 255, 255, 255 }, 10);
+                    }
+                }
+            }
+
+            // Проверка столкновений игрока
+            if (invincibilityTimer <= 0) {
+                for (auto& bullet : bullets) {
+                    if (!bullet.active || !bullet.isEnemyBullet) continue;
+
+                    float dx = player.position.x - bullet.position.x;
+                    float dy = player.position.y - bullet.position.y;
+                    float distance = sqrt(dx * dx + dy * dy);
+
+                    if (distance < player.radius + bullet.radius) {
+                        bullet.active = false;
+
+                        if (player.hasShield) {
+                            player.hasShield = false;
+                            CreateExplosion(bullet.position, { 0, 255, 255, 255 }, 15);
+                        }
+                        else {
+                            player.lives--;
+                            invincibilityTimer = INVINCIBILITY_DURATION;
+                            CreateExplosion(player.position, player.color, 20);
+
+                            if (player.lives <= 0) {
+                                gameOver = true;
+                                gameOverTimer = 0;
+                                CreateExplosion(player.position, player.color, 60);
+                                SaveHighScore(score, level, enemiesDestroyed);
+                            }
+                        }
+                    }
+                }
+
+                for (auto& enemy : enemies) {
+                    if (!enemy.active) continue;
+
+                    float dx = player.position.x - enemy.position.x;
+                    float dy = player.position.y - enemy.position.y;
+                    float distance = sqrt(dx * dx + dy * dy);
+
+                    if (distance < player.radius + enemy.radius) {
+                        if (player.hasShield) {
+                            player.hasShield = false;
+                            enemy.active = false;
+                            CreateExplosion(enemy.position, { 0, 255, 255, 255 }, 30);
+                        }
+                        else {
+                            player.lives--;
+                            invincibilityTimer = INVINCIBILITY_DURATION;
+                            enemy.active = false;
+                            CreateExplosion(enemy.position, enemy.color, 40);
+
+                            if (player.lives <= 0) {
+                                gameOver = true;
+                                gameOverTimer = 0;
+                                CreateExplosion(player.position, player.color, 60);
+                                SaveHighScore(score, level, enemiesDestroyed);
+                            }
+                        }
+                    }
+                }
+
+                if (boss.active) {
+                    float dx = player.position.x - boss.position.x;
+                    float dy = player.position.y - boss.position.y;
+                    float distance = sqrt(dx * dx + dy * dy);
+
+                    if (distance < player.radius + boss.radius) {
+                        player.lives--;
+                        invincibilityTimer = INVINCIBILITY_DURATION;
+
+                        if (player.lives <= 0) {
+                            gameOver = true;
+                            gameOverTimer = 0;
+                            CreateExplosion(player.position, player.color, 60);
+                            SaveHighScore(score, level, enemiesDestroyed);
+                        }
+                    }
+                }
+            }
+
+            // Обновление бонусов
+            for (auto& powerUp : powerUps) {
+                if (!powerUp.active) continue;
+
+                powerUp.position.y += powerUp.velocity.y;
+                powerUp.lifeTime -= frameTime;
+                powerUp.bobTimer += frameTime;
+                powerUp.position.x += sin(powerUp.bobTimer * 3.0f) * 0.5f;
+
+                if (powerUp.lifeTime <= 0 || powerUp.position.y > screenHeight) {
+                    powerUp.active = false;
+                }
+
+                float dx = player.position.x - powerUp.position.x;
+                float dy = player.position.y - powerUp.position.y;
+                float distance = sqrt(dx * dx + dy * dy);
+
+                if (distance < player.radius + powerUp.radius) {
+                    powerUp.active = false;
+                    stats.powerUpsCollected++;
+
+                    switch (powerUp.type) {
+                    case PowerUpType::HEALTH:
+                        if (player.lives < player.maxLives) player.lives++;
+                        break;
+                    case PowerUpType::TRIPLE_SHOT:
+                        player.hasTripleShot = true;
+                        player.tripleShotTimer = 10.0f;
+                        break;
+                    case PowerUpType::RAPID_FIRE:
+                        player.hasRapidFire = true;
+                        player.rapidFireTimer = 8.0f;
+                        break;
+                    case PowerUpType::SHIELD:
+                        player.hasShield = true;
+                        player.shieldTimer = 15.0f;
+                        break;
+                    case PowerUpType::SCORE_BOOST:
+                        player.hasScoreBoost = true;
+                        player.scoreBoostTimer = 12.0f;
+                        break;
+                    }
+                }
+            }
+
+            // Обновление частиц
+            for (auto& particle : particles) {
+                particle.position.x += particle.velocity.x * frameTime;
+                particle.position.y += particle.velocity.y * frameTime;
+                particle.lifeTime -= frameTime;
+                particle.velocity.x *= 0.98f;
+                particle.velocity.y *= 0.98f;
+            }
+
+            // Обновление трейлов
+            if (static_cast<int>(GetTime() * 30) % 2 == 0) {
+                Trail newTrail;
+                newTrail.position = player.position;
+                newTrail.maxLifeTime = 0.5f;
+                newTrail.lifeTime = newTrail.maxLifeTime;
+                newTrail.color = { 100, 200, 255, 255 };
+                trails.push_back(newTrail);
+            }
+
+            for (auto& trail : trails) {
+                trail.lifeTime -= frameTime;
+            }
+
+            // Проверка достижений
+            for (auto& achievement : achievements) {
+                if (!achievement.unlocked && achievement.condition()) {
+                    achievement.unlocked = true;
+                }
+            }
+
+            // Обновление точности
+            if (stats.totalShots > 0) {
+                stats.accuracy = (static_cast<float>(stats.totalHits) / stats.totalShots) * 100.0f;
+            }
+
+            // Удаление неактивных объектов
+            bullets.erase(std::remove_if(bullets.begin(), bullets.end(),
+                [](const Bullet& b) { return !b.active; }), bullets.end());
+            enemies.erase(std::remove_if(enemies.begin(), enemies.end(),
+                [](const Enemy& e) { return !e.active; }), enemies.end());
+            particles.erase(std::remove_if(particles.begin(), particles.end(),
+                [](const Particle& p) { return p.lifeTime <= 0; }), particles.end());
+            powerUps.erase(std::remove_if(powerUps.begin(), powerUps.end(),
+                [](const PowerUp& p) { return !p.active; }), powerUps.end());
+            trails.erase(std::remove_if(trails.begin(), trails.end(),
+                [](const Trail& t) { return t.lifeTime <= 0; }), trails.end());
+        }
+
+        // === ОТРИСОВКА ===
+        BeginDrawing();
+
+        // Градиентный фон
+        ClearBackground({ 5, 5, 30, 255 });
+
+        // Отрисовка солнца
+        float sunPulse = 1.0f + sin(sun.pulseTimer * 2.0f) * 0.05f;
+        DrawCircleV(sun.position, sun.radius * sunPulse, sun.outerColor);
+        DrawCircleV(sun.position, sun.radius * 0.8f * sunPulse, sun.innerColor);
+        DrawCircleV(sun.position, sun.coreRadius * sunPulse, sun.coreColor);
+
+        // Лучи солнца
+        for (int i = 0; i < 12; i++) {
+            float angle = sun.rotationAngle + i * 30.0f * DEG2RAD;
+            Vector2 rayStart = {
+                sun.position.x + cos(angle) * sun.radius * 1.1f,
+                sun.position.y + sin(angle) * sun.radius * 1.1f
+            };
+            Vector2 rayEnd = {
+                sun.position.x + cos(angle) * sun.radius * 1.4f * sunPulse,
+                sun.position.y + sin(angle) * sun.radius * 1.4f * sunPulse
+            };
+            DrawLineEx(rayStart, rayEnd, 3.0f, { 255, 200, 100, 150 });
+        }
+
+        // Отрисовка туманностей
+        for (const auto& nebula : nebulae) {
+            Color nebulaColor = nebula.color;
+            nebulaColor.a = static_cast<unsigned char>(nebula.alpha * 255);
+            DrawCircleV(nebula.position, nebula.radius, nebulaColor);
+            DrawCircleV(nebula.position, nebula.radius * 0.7f, nebulaColor);
+            DrawCircleV(nebula.position, nebula.radius * 0.4f, nebulaColor);
+        }
+
+        if (gameState == GameState::MENU) {
+            DrawText("SPACE SHOOTER ULTIMATE", screenWidth / 2 - 400, 200, 60, { 255, 200, 100, 255 });
+            DrawText("4K EDITION", screenWidth / 2 - 100, 280, 30, { 200, 200, 255, 255 });
+
+            DrawText("Press ENTER to start", screenWidth / 2 - 200, 500, 30, WHITE);
+            DrawText("Press H for high scores", screenWidth / 2 - 200, 550, 30, WHITE);
+            DrawText("Press S for shop", screenWidth / 2 - 200, 600, 30, WHITE);
+
+            DrawText("Controls:", screenWidth / 2 - 100, 700, 25, YELLOW);
+            DrawText("WASD - Move", screenWidth / 2 - 150, 750, 20, WHITE);
+            DrawText("SPACE or LCTRL - Shoot", screenWidth / 2 - 150, 780, 20, WHITE);
+            DrawText("1-4 - Special abilities", screenWidth / 2 - 150, 810, 20, WHITE);
+            DrawText("P - Pause", screenWidth / 2 - 150, 840, 20, WHITE);
+        }
+        else if (gameState == GameState::HIGH_SCORES) {
+            DrawText("HIGH SCORES", screenWidth / 2 - 200, 100, 60, { 255, 200, 100, 255 });
+            auto scores = LoadHighScores();
+            for (int i = 0; i < std::min(10, static_cast<int>(scores.size())); i++) {
+                DrawText(TextFormat("%d. Score: %d, Level: %d, Enemies: %d",
+                    i + 1, scores[i].score, scores[i].level, scores[i].enemiesDestroyed),
+                    screenWidth / 2 - 300, 250 + i * 50, 30, WHITE);
+            }
+            if (scores.empty()) {
+                DrawText("No scores yet!", screenWidth / 2 - 120, 400, 30, GRAY);
+            }
+            DrawText("Press ESC to return", screenWidth / 2 - 150, 900, 25, WHITE);
+        }
+        else if (gameState == GameState::SHOP) {
+            DrawText("SHOP", screenWidth / 2 - 80, 50, 50, { 255, 200, 100, 255 });
+            DrawText(TextFormat("Currency: %d", currency), screenWidth / 2 - 120, 120, 35, YELLOW);
+
+            for (int i = 0; i < shopItems.size(); i++) {
+                int y = 200 + i * 70;
+                Color itemColor = shopItems[i].purchased ? GREEN : WHITE;
+                DrawText(TextFormat("%s - %d", shopItems[i].name.c_str(), shopItems[i].cost),
+                    screenWidth / 2 - 250, y, 25, itemColor);
+                DrawText(shopItems[i].description.c_str(), screenWidth / 2 - 250, y + 30, 18, GRAY);
+
+                if (!shopItems[i].purchased && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                    Vector2 mousePos = GetMousePosition();
+                    if (mousePos.y >= y && mousePos.y <= y + 55 &&
+                        mousePos.x >= screenWidth / 2 - 250 && mousePos.x <= screenWidth / 2 + 150) {
+                        if (currency >= shopItems[i].cost) {
+                            currency -= shopItems[i].cost;
+                            shopItems[i].purchased = true;
+
+                            if (shopItems[i].name == "Better Engine") {
+                                player.speed += 1.0f;
+                            }
+                            else if (shopItems[i].name == "Stronger Shots") {
+                                // Увеличение урона
+                            }
+                            else if (shopItems[i].name == "Extra Life") {
+                                player.maxLives += 1;
+                            }
+                            else if (shopItems[i].name == "Spread Shot") {
+                                player.weaponType = WeaponType::SPREAD;
+                            }
+                            else if (shopItems[i].name == "Laser Weapon") {
+                                player.weaponType = WeaponType::LASER;
+                            }
+                            else if (shopItems[i].name == "Plasma Weapon") {
+                                player.weaponType = WeaponType::PLASMA;
+                            }
+                        }
+                    }
+                }
+            }
+            DrawText("Press ESC to return", screenWidth / 2 - 150, 900, 25, WHITE);
+        }
+        else if (gameState == GameState::PLAYING || gameState == GameState::PAUSED || gameState == GameState::GAME_OVER) {
+            // Отрисовка звёзд
+            for (const auto& star : stars) {
+                DrawCircleV(star.position, star.size, star.color);
+            }
+
+            // Отрисовка трейлов
+            for (const auto& trail : trails) {
+                float alpha = trail.lifeTime / trail.maxLifeTime;
+                Color trailColor = trail.color;
+                trailColor.a = static_cast<unsigned char>(255 * alpha);
+                DrawCircleV(trail.position, player.radius * alpha, trailColor);
+            }
+
+            // Отрисовка бонусов
+            for (const auto& powerUp : powerUps) {
+                if (!powerUp.active) continue;
+
+                Color powerUpColor;
+                switch (powerUp.type) {
+                case PowerUpType::HEALTH: powerUpColor = RED; break;
+                case PowerUpType::TRIPLE_SHOT: powerUpColor = GREEN; break;
+                case PowerUpType::RAPID_FIRE: powerUpColor = YELLOW; break;
+                case PowerUpType::SHIELD: powerUpColor = { 0, 255, 255, 255 }; break;
+                case PowerUpType::SCORE_BOOST: powerUpColor = { 255, 200, 100, 255 }; break;
+                }
+
+                float pulse = 1.0f + sin(powerUp.bobTimer * 5.0f) * 0.2f;
+                DrawCircleV(powerUp.position, powerUp.radius * pulse, powerUpColor);
+                DrawCircleV(powerUp.position, powerUp.radius * pulse * 0.7f, WHITE);
+            }
+
+            // Отрисовка пуль
+            for (const auto& bullet : bullets) {
+                if (bullet.active) {
+                    DrawCircleV(bullet.position, bullet.radius, bullet.color);
+                    DrawCircleV(bullet.position, bullet.radius - 3.0f, WHITE);
+                }
+            }
+
+            // Отрисовка врагов
+            for (const auto& enemy : enemies) {
+                if (!enemy.active) continue;
+
+                switch (enemy.type) {
+                case EnemyType::ASTEROID:
+                    DrawPoly(enemy.position, 8, enemy.radius, enemy.rotation, enemy.color);
+                    break;
+                case EnemyType::FAST_ASTEROID:
+                    DrawPoly(enemy.position, 6, enemy.radius, enemy.rotation, enemy.color);
+                    DrawCircleV({ enemy.position.x - enemy.velocity.x * 3.0f,
+                                enemy.position.y - enemy.velocity.y * 3.0f },
+                        enemy.radius * 0.5f, { 255, 200, 100, 100 });
+                    break;
+                case EnemyType::TANK_ASTEROID:
+                    DrawPoly(enemy.position, 10, enemy.radius, enemy.rotation, enemy.color);
+                    DrawRectangle(enemy.position.x - enemy.radius, enemy.position.y - enemy.radius - 10,
+                        enemy.radius * 2, 8, RED);
+                    DrawRectangle(enemy.position.x - enemy.radius, enemy.position.y - enemy.radius - 10,
+                        enemy.radius * 2 * enemy.health / enemy.maxHealth, 8, GREEN);
+                    break;
+                case EnemyType::UFO:
+                    DrawEllipse(enemy.position.x, enemy.position.y,
+                        enemy.radius * 1.5f, enemy.radius * 0.6f, enemy.color);
+                    DrawCircleV({ enemy.position.x, enemy.position.y - 8.0f }, enemy.radius * 0.5f,
+                        { 150, 200, 255, 200 });
+                    if (static_cast<int>(GetTime() * 5) % 2 == 0) {
+                        DrawCircleV({ enemy.position.x - enemy.radius, enemy.position.y + 8.0f }, 4.0f, RED);
+                        DrawCircleV({ enemy.position.x + enemy.radius, enemy.position.y + 8.0f }, 4.0f, BLUE);
+                    }
+                    break;
+                case EnemyType::SPLITTER:
+                    DrawPoly(enemy.position, 3, enemy.radius, enemy.rotation, enemy.color);
+                    DrawPoly(enemy.position, 3, enemy.radius * 0.5f, -enemy.rotation, { 50, 255, 50, 255 });
+                    break;
+                }
+            }
+
+            // Отрисовка босса
+            if (boss.active) {
+                DrawCircleV(boss.position, boss.radius, { 255, 0, 255, 255 });
+                DrawCircleV(boss.position, boss.radius * 0.8f, { 200, 0, 200, 255 });
+                DrawCircleV(boss.position, boss.radius * 0.5f, { 150, 0, 150, 255 });
+
+                DrawRectangle(screenWidth / 2 - 200, 20, 400, 25, RED);
+                DrawRectangle(screenWidth / 2 - 200, 20,
+                    400 * boss.health / boss.maxHealth, 25, GREEN);
+                DrawText("BOSS", screenWidth / 2 - 40, 55, 40, WHITE);
+            }
+
+            // Отрисовка частиц
+            for (const auto& particle : particles) {
+                float alpha = particle.lifeTime / particle.maxLifeTime;
+                Color particleColor = particle.color;
+                particleColor.a = static_cast<unsigned char>(255.0f * alpha);
+                DrawCircleV(particle.position, particle.size * alpha, particleColor);
+            }
+
+            // Отрисовка игрока
+            if (invincibilityTimer <= 0.0f || static_cast<int>(invincibilityTimer * 10) % 2 == 0) {
+                DrawTriangle(
+                    { player.position.x, player.position.y - player.radius },
+                    { player.position.x - player.radius, player.position.y + player.radius * 0.7f },
+                    { player.position.x + player.radius, player.position.y + player.radius * 0.7f },
+                    player.color
+                );
+
+                DrawCircleV({ player.position.x, player.position.y - player.radius * 0.2f },
+                    player.radius * 0.4f, { 150, 220, 255, 255 });
+
+                if (static_cast<int>(GetTime() * 20) % 2 == 0) {
+                    DrawTriangle(
+                        { player.position.x - player.radius * 0.4f, player.position.y + player.radius * 0.7f },
+                        { player.position.x + player.radius * 0.4f, player.position.y + player.radius * 0.7f },
+                        { player.position.x, player.position.y + player.radius * 1.5f },
+                        { 255, 150, 50, 200 }
+                    );
+                }
+
+                if (player.hasShield) {
+                    DrawCircleV(player.position, player.radius + 20.0f, { 0, 255, 255, 100 });
+                    DrawCircleLines(player.position.x, player.position.y,
+                        player.radius + 20.0f, { 0, 255, 255, 200 });
+                }
+            }
+
+            // Отрисовка UI
+            DrawText(TextFormat("Score: %d", score), 30, 30, 40, WHITE);
+            DrawText(TextFormat("Level: %d", level), 30, 80, 40, YELLOW);
+            DrawText(TextFormat("Enemies: %d", enemiesDestroyed), 30, 130, 30, GRAY);
+            DrawText(TextFormat("Currency: %d", currency), 30, 170, 30, ORANGE);
+
+            if (combo.comboCount > 1) {
+                DrawText(TextFormat("Combo x%d (x%.1f)", combo.comboCount, combo.comboMultiplier),
+                    30, 220, 35, { 255, 150, 0, 255 });
+            }
+
+            DrawText(TextFormat("1: Nuke %s", nukeAbility.isReady ? "[READY]" : TextFormat("%.0fs", nukeAbility.currentCooldown)),
+                30, 280, 20, nukeAbility.isReady ? GREEN : GRAY);
+            DrawText(TextFormat("2: Slow %s", slowAbility.isReady ? "[READY]" : TextFormat("%.0fs", slowAbility.currentCooldown)),
+                30, 310, 20, slowAbility.isReady ? GREEN : GRAY);
+            DrawText(TextFormat("3: Invincible %s", invincibleAbility.isReady ? "[READY]" : TextFormat("%.0fs", invincibleAbility.currentCooldown)),
+                30, 340, 20, invincibleAbility.isReady ? GREEN : GRAY);
+            DrawText(TextFormat("4: Heal %s", healAbility.isReady ? "[READY]" : TextFormat("%.0fs", healAbility.currentCooldown)),
+                30, 370, 20, healAbility.isReady ? GREEN : GRAY);
+
+            for (int i = 0; i < player.lives; i++) {
+                DrawTriangle(
+                    { 50.0f + i * 40.0f, screenHeight - 40.0f },
+                    { 35.0f + i * 40.0f, screenHeight - 15.0f },
+                    { 65.0f + i * 40.0f, screenHeight - 15.0f },
+                    { 100, 200, 255, 255 }
+                );
+            }
+
+            int achievementY = 420;
+            for (const auto& achievement : achievements) {
+                if (achievement.unlocked) {
+                    DrawText(TextFormat("Achievement: %s", achievement.name.c_str()),
+                        30, achievementY, 20, GREEN);
+                    achievementY += 25;
+                }
+            }
+
+            if (gameMode == GameMode::TIME_ATTACK) {
+                DrawText(TextFormat("Time: %.0f", timeAttackTimer),
+                    screenWidth - 150, 30, 40, timeAttackTimer < 10 ? RED : WHITE);
+            }
+
+            if (gameState == GameState::PAUSED) {
+                DrawRectangle(0, 0, screenWidth, screenHeight, { 0, 0, 0, 180 });
+                DrawText("PAUSED", screenWidth / 2 - 100, screenHeight / 2 - 40, 60, WHITE);
+                DrawText("Press P to resume", screenWidth / 2 - 140, screenHeight / 2 + 40, 30, WHITE);
+                DrawText("Press ESC for menu", screenWidth / 2 - 140, screenHeight / 2 + 80, 30, WHITE);
+            }
+
+            if (gameState == GameState::GAME_OVER) {
+                gameOverTimer += frameTime;
+
+                // Полностью черный экран
+                DrawRectangle(0, 0, screenWidth, screenHeight, BLACK);
+
+                // Заголовок GAME OVER
+                DrawText("GAME OVER", screenWidth / 2 - 250, screenHeight / 2 - 300, 80, RED);
+
+                // Результаты игры
+                int resultY = screenHeight / 2 - 180;
+                int lineSpacing = 45;
+
+                DrawText("=== GAME RESULTS ===", screenWidth / 2 - 180, resultY, 35, YELLOW);
+                resultY += lineSpacing + 20;
+
+                DrawText(TextFormat("Final Score: %d", score), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing;
+
+                DrawText(TextFormat("Level Reached: %d", stats.maxLevelReached), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing;
+
+                DrawText(TextFormat("Enemies Destroyed: %d", enemiesDestroyed), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing;
+
+                DrawText(TextFormat("Bosses Defeated: %d", stats.bossesDefeated), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing;
+
+                DrawText(TextFormat("Power-ups Collected: %d", stats.powerUpsCollected), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing;
+
+                DrawText(TextFormat("Max Combo: x%d", combo.maxComboReached), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing;
+
+                DrawText(TextFormat("Shots Fired: %d", stats.totalShots), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing;
+
+                DrawText(TextFormat("Accuracy: %.1f%%", stats.accuracy), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing + 20;
+
+                DrawText(TextFormat("Time Played: %.1f seconds", stats.gameTime), screenWidth / 2 - 150, resultY, 30, WHITE);
+                resultY += lineSpacing + 20;
+
+                // Достижения
+                int achievementsUnlocked = 0;
+                for (const auto& achievement : achievements) {
+                    if (achievement.unlocked) achievementsUnlocked++;
+                }
+                DrawText(TextFormat("Achievements Unlocked: %d/%d", achievementsUnlocked, achievements.size()),
+                    screenWidth / 2 - 150, resultY, 30, { 255, 200, 100, 255 });
+
+                if (gameOverTimer > 1.0f) {
+                    DrawText("Press SPACE to restart", screenWidth / 2 - 180, screenHeight - 150, 30, WHITE);
+                    DrawText("Press ESC for menu", screenWidth / 2 - 150, screenHeight - 100, 30, WHITE);
+                }
+            }
+        }
+
+        EndDrawing();
+    }
+
+    CloseWindow();
+    return 0;
+}
