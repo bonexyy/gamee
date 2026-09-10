@@ -1,1 +1,152 @@
+#define _CRT_SECURE_NO_WARNINGS
+#include <raylib.h>
+#include <vector>
+#include <cstdlib>
+#include <ctime>
+#include <cmath>
+#include <string>
+#include <algorithm>
+#include <fstream>
+#include <functional>
+#include <sstream>
 
+enum class EnemyType { SHOOTER, SPREADER, HOMING_LAUNCHER, UFO, BOMBER, LASER_TURRET, SUMMONER, CHARGER, SPINNER, CERATOTITAN, DWELLER };
+enum class EnemyRank { NORMAL, ELITE, CHAMPION };
+enum class GameState { MENU, MODE_SELECT, DRAFT, PLAYING, PAUSED, GAME_OVER, LEVEL_UP, CHALLENGES, ACCOUNT, PATH_TREE };
+enum class GameMode { CLASSIC, DRAFT, DAILY, WILD };
+enum class UpgradeCategory { WEAPON, BODY, SHIELD, UTILITY, SUPER, WILD };
+enum class WeaponGear { PULSE, BLADE, GRENADE, SALVO, RAILGUN, SWORD, LANCE };
+enum class BodyGear { INTERCEPTOR, ARCHITECT, FIREFLY, CARRIER, GHOST };
+enum class ShieldGear { STANDARD, AMPLIFIED, HARDLIGHT, SANCTUARY, WARP, HALO };
+enum class Formation { NONE, WEDGE, RING, COLUMN, SCATTER, ORBIT, V_FORM, SUPPORT, FLANK };
+enum class PathType { FIRE, LIGHTNING, ICE, VOID, ORDER, COUNT };
+
+struct PathDef { std::string name; std::string tierNames[4]; std::string tierDesc[4]; Color color; };
+
+inline std::vector<PathDef> GetPathDefs() {
+    std::vector<PathDef> d;
+    d.push_back({"FIRE", {"Ignite", "Combustion", "Inferno", "Supernova"}, {"Bullets set enemies on fire", "Burning enemies explode", "2x burn + explosion", "10 kills: fire nova"}, Color{255, 100, 50, 255}});
+    d.push_back({"LIGHTNING", {"Chain", "Overcharge", "Storm", "Thunder God"}, {"Bullets chain to nearby", "Chain 60% + 2 jumps", "20% stun chance", "3 jumps + 40% stun"}, Color{255, 255, 100, 255}});
+    d.push_back({"ICE", {"Frostbite", "Shatter", "Frozen Heart", "Absolute Zero"}, {"Slow enemies on hit", "+50% dmg to slowed", "Slowed drop 2x XP", "Freeze all every 5s"}, Color{100, 200, 255, 255}});
+    d.push_back({"VOID", {"Devour", "Siphon", "Sacrifice", "Singularity"}, {"+2% dmg per kill", "Kills grant 1 HP", "[E]: -25HP x3 dmg", "[R]: black hole"}, Color{180, 100, 255, 255}});
+    d.push_back({"ORDER", {"Focus", "Precision", "Perfection", "Executioner"}, {"Crit chance +15%", "Crit dmg 4x", "Crits reduce CD", "Instant kill <30%"}, Color{255, 200, 100, 255}});
+    return d;
+}
+
+struct Upgrade { std::string name, description; UpgradeCategory category; int maxLevel, currentLevel; float value, valuePerLevel; Color color; int treeId, tier; bool isSuperMod, isWildMod; bool IsMaxed() const { return currentLevel >= maxLevel; } };
+struct ModTree { std::string name; std::vector<int> mods; Color color; };
+struct ChallengeMode { std::string name, description; bool enabled; float difficultyMultiplier, expMultiplier; };
+struct Bullet { Vector2 position, velocity, target, startPosition; float radius, lifeTime, burnDamage, burnDuration, trailTimer, grenadeTimer, returnTime; int damage; Color color; bool active, isEnemyBullet, isHoming, piercing, explosive, returning, isGrenade, isCrit; };
+struct Shockwave { Vector2 position; float radius, maxRadius, lifeTime, maxLifeTime; Color color; float thickness; };
+struct DamageNumber { Vector2 position, velocity; int damage; float lifeTime, maxLifeTime, scale; Color color; };
+struct MuzzleFlash { Vector2 position; float angle, lifeTime, maxLifeTime, size; Color color; };
+struct DeathDissolve { std::vector<Vector2> pixels, velocities; std::vector<float> sizes; Color color; float lifeTime, maxLifeTime; };
+struct ShieldRipple { Vector2 hitPosition; float angle, lifeTime, maxLifeTime; };
+
+struct Enemy {
+    bool active; Vector2 position, velocity;
+    float radius, rotation, rotationSpeed, shootTimer, shootInterval, hitFlashTimer, spawnTimer;
+    float burnDamage, burnTimer, burnTick, slowTimer, slowMultiplier, specialAttackTimer;
+    int health, maxHealth, scoreValue, expValue;
+    Color color; EnemyType type; EnemyRank rank;
+    std::vector<Vector2> segments; int segmentCount; float segmentSpacing, summonTimer; int summonCount;
+    float chargeTimer, chargeCooldown; bool charging;
+    float laserCharge, laserTimer; bool laserFiring;
+    Vector2 laserTarget;
+    float orbitAngle, orbitRadius;
+    Vector2 homePos;
+};
+
+struct Particle { Vector2 position, velocity; float lifeTime, maxLifeTime, size, rotation, rotationSpeed; Color color; };
+struct TrailParticle { Vector2 position; float lifeTime, maxLifeTime, size; Color color; };
+struct Star { Vector2 position; float speed, size, brightness; Color color; int layer; };
+struct AmbientParticle { Vector2 position, velocity; float lifeTime, maxLifeTime, size; Color color; };
+struct ExpOrb { Vector2 position, velocity; int value; float lifeTime, bobTimer; bool active; };
+struct Drone { Vector2 position, velocity; float angle, orbitAngle, shootTimer; bool active; };
+
+struct Player {
+    Vector2 position, velocity; float radius, speed, rotation, visualRotation; Color color;
+    int health, maxHealth, level, currentExp, expToNextLevel;
+    WeaponGear weaponGear; BodyGear bodyGear; ShieldGear shieldGear;
+    float damageMultiplier, fireRateMultiplier, projectileSpeed, bulletSize, critChance, critMultiplier;
+    int projectileCount;
+    bool hasPiercing, hasExplosive, hasHoming, hasBurning, hasShield;
+    float shieldTimer, shieldRadius, shieldPulse, shieldCooldown, pickupRadius, invincibilityTimer, shootCooldown, regenRate;
+    std::vector<Drone> drones;
+    float fireflyTrailTimer, recoilTimer, chargeGlow;
+    int unusedUpgradePoints; float ataraxiaBonus, warpCooldown;
+    bool hasDeathBlossom, hasVampireCurse, hasGlassBody;
+    float overdriveEnergy; bool overdriveActive; float overdriveTimer;
+    int pathTiers[5];
+    int supernovaKills;
+    float damageStack;
+    float sacrificeTimer, sacrificeCooldown, blackholeCooldown, freezePulseTimer;
+};
+
+struct ComboSystem {
+    int comboCount, maxComboReached; float comboTimer, comboMultiplier;
+    void Reset() { comboCount = 0; comboTimer = 0; comboMultiplier = 1.0f; maxComboReached = 0; }
+    void AddKill() { comboCount++; comboTimer = 3.0f; comboMultiplier = std::min(5.0f, 1.0f + comboCount * 0.1f); if (comboCount > maxComboReached) maxComboReached = comboCount; }
+    void Update() { if (comboTimer > 0) { comboTimer -= GetFrameTime(); if (comboTimer <= 0) { comboCount = 0; comboMultiplier = 1.0f; } } }
+};
+
+struct GameStats {
+    int totalShots, totalHits, powerUpsCollected, bossesDefeated, maxLevelReached;
+    int elitesKilled, championsKilled, critHits, serpentsKilled, summonersKilled, myrmidonsKilled, bossesKilled;
+    float accuracy, gameTime;
+};
+
+struct AccountData {
+    int rank, currentXP, xpToNextRank, totalKills, totalRuns, highestWave;
+    bool unlockedBlade, unlockedGrenade, unlockedSalvo, unlockedRailgun;
+    bool unlockedGhost, unlockedCarrier, unlockedWarp, unlockedHalo;
+    bool unlockedSuperMods, unlockedEndless, unlockedSword, unlockedLance;
+    bool unlockedDraft, unlockedWild, unlockedDaily;
+    int dailyBestScore, dailyBestStreak;
+};
+
+struct SavedRun {
+    bool valid; GameMode mode;
+    int wave, score, enemiesDestroyed, playerLevel, playerExp, playerExpNext, playerHealth, playerMaxHealth;
+    WeaponGear weaponGear; BodyGear bodyGear; ShieldGear shieldGear;
+    float playerX, playerY;
+    int rerollsLeft, banishedCount, unusedPoints;
+    float damageMultiplier, fireRateMultiplier;
+    int projectileCount;
+    bool hasPiercing, hasExplosive, hasHoming, hasBurning;
+    bool hasDeathBlossom, hasVampireCurse, hasGlassBody;
+    float ataraxiaBonus;
+    int pathTiers[5];
+    std::vector<int> upgradeLevels;
+};
+
+struct Location { std::string name; Color bgColor, nebulaColor1, nebulaColor2, starTint; float nebulaAlpha; bool hasAsteroidField; };
+struct BgAsteroid { Vector2 pos; float size, rotation, rotSpeed, speed; };
+
+struct Button {
+    Rectangle bounds; std::string text; Color baseColor, hoverColor, textColor;
+    bool isHovered; float hoverAnimation;
+    bool IsClicked() { Vector2 m = GetMousePosition(); isHovered = CheckCollisionPointRec(m, bounds); return isHovered && IsMouseButtonPressed(MOUSE_LEFT_BUTTON); }
+    void Update() { Vector2 m = GetMousePosition(); isHovered = CheckCollisionPointRec(m, bounds);
+        if (isHovered) { hoverAnimation += GetFrameTime() * 5.0f; if (hoverAnimation > 1.0f) hoverAnimation = 1.0f; }
+        else { hoverAnimation -= GetFrameTime() * 5.0f; if (hoverAnimation < 0.0f) hoverAnimation = 0.0f; } }
+    void Draw() {
+        Color c = baseColor;
+        if (hoverAnimation > 0) { c.r = (unsigned char)(baseColor.r + (hoverColor.r - baseColor.r) * hoverAnimation); c.g = (unsigned char)(baseColor.g + (hoverColor.g - baseColor.g) * hoverAnimation); c.b = (unsigned char)(baseColor.b + (hoverColor.b - baseColor.b) * hoverAnimation); }
+        float sc = 1.0f + hoverAnimation * 0.05f;
+        Rectangle sb = { bounds.x - (bounds.width * (sc - 1.0f)) / 2.0f, bounds.y - (bounds.height * (sc - 1.0f)) / 2.0f, bounds.width * sc, bounds.height * sc };
+        for (int i = 4; i >= 1; i--) { Color gc = c; gc.a = (unsigned char)(30 / i * (1.0f + hoverAnimation)); DrawRectangleRounded({sb.x - i * 4.0f, sb.y - i * 4.0f, sb.width + i * 8.0f, sb.height + i * 8.0f}, 0.15f, 4, gc); }
+        DrawRectangleRounded(sb, 0.15f, 4, c); DrawRectangleRoundedLines(sb, 0.15f, 4, WHITE);
+        int fs = 28; int tw = MeasureText(text.c_str(), fs);
+        DrawText(text.c_str(), (int)(sb.x + sb.width / 2 - tw / 2), (int)(sb.y + sb.height / 2 - fs / 2), fs, textColor);
+    }
+};
+
+inline unsigned char CC(int v) { return (unsigned char)(v < 0 ? 0 : (v > 255 ? 255 : v)); }
+
+Vector2 RotateVectorCustom(Vector2 v, float angle) {
+    Vector2 r;
+    r.x = v.x * cosf(angle) - v.y * sinf(angle);
+    r.y = v.x * sinf(angle) + v.y * cosf(angle);
+    return r;
+}
