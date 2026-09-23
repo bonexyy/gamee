@@ -8,7 +8,7 @@
 #include <fstream>
 #include <functional>
 8922528058:AAG5TODMCykjLsLcOOGZoNRiHHnfdlCDHUE
-
+8922528058:AAG5TODMCykjLsLcOOGZoNRiHHnfdlCDHUE
 // Перечисление типов врагов
 enum class EnemyType {
     ASTEROID,
