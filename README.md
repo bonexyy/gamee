@@ -29,7 +29,7 @@
 Минимальные:
 ОС: Windows 7+, Linux, macOS
 Процессор: 2.0 GHz Dual Core
-ОЗУ: 4 GB
+ОЗУ: 4 GBл
 Видеокарта: Поддержка OpenGL 3.3
 Разрешение: 1920x1080 (Full HD)
 Рекомендуемые:
@@ -43,3 +43,4 @@
 raylib 4.0 или выше
 Компилятор C++ с поддержкой C++17
 OpenGL 3.3+
+https://docs.google.com/spreadsheets/d/1NGVhU5bI_g8NErqKvDcoQDD6d-hd97Imw1LKWnWHq2E/edit?usp=sharing
